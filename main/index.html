@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JK-BMS</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: monospace; background: #0d1117; color: #c9d1d9; padding: 16px; max-width: 600px; }
+
+/* Вкладки */
+.tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+.tab  { padding: 8px 20px; border-radius: 6px; cursor: pointer; background: #161b22;
+        border: 1px solid #30363d; color: #8b949e; font-family: monospace; font-size: 0.95em; }
+.tab.active { background: #1f6feb22; border-color: #1f6feb; color: #58a6ff; }
+.page { display: none; }
+.page.active { display: block; }
+
+/* Карточки */
+.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; margin-bottom: 10px; }
+.big  { font-size: 2.4em; font-weight: bold; }
+.soc  { color: #3fb950; }
+.vbat { color: #58a6ff; margin-left: 16px; }
+
+/* Таблица ячеек */
+table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+th    { color: #8b949e; font-weight: normal; text-align: left; padding: 4px 8px; border-bottom: 1px solid #30363d; }
+td    { padding: 4px 8px; border-bottom: 1px solid #21262d; }
+.min  { color: #f85149; }
+.max  { color: #3fb950; }
+
+/* Мелкие блоки в ряд */
+.row2      { display: flex; gap: 10px; flex-wrap: wrap; }
+.row2 .card { flex: 1; min-width: 160px; }
+.label { color: #8b949e; font-size: 0.85em; }
+.val   { font-size: 1.15em; margin-top: 2px; }
+.pos   { color: #3fb950; }
+.neg   { color: #f85149; }
+
+/* Статус */
+#status { font-size: 0.75em; color: #484f58; margin-top: 8px; }
+
+/* Форма настроек */
+.section-title { color: #58a6ff; font-size: 0.85em; margin-bottom: 8px; }
+.field  { margin-bottom: 12px; }
+.field label { display: block; color: #8b949e; font-size: 0.85em; margin-bottom: 4px; }
+.field input[type=text],
+.field input[type=password],
+.field input[type=number] {
+  width: 100%; background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+  color: #c9d1d9; font-family: monospace; font-size: 0.95em; padding: 6px 10px;
+}
+.field input:focus { outline: none; border-color: #1f6feb; }
+.checkbox-row { display: flex; align-items: center; gap: 8px; }
+.checkbox-row input { width: auto; }
+.hint  { color: #484f58; font-size: 0.78em; margin-top: 3px; }
+.btn   { background: #1f6feb; border: none; border-radius: 6px; color: #fff;
+         font-family: monospace; font-size: 0.95em; padding: 8px 20px; cursor: pointer; }
+.btn:hover { background: #388bfd; }
+.btn:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
+.btn.danger { background: #da3633; }
+.btn.danger:hover { background: #f85149; }
+.btn.sm { padding: 5px 12px; font-size: 0.85em; white-space: nowrap; }
+#save-msg { margin-left: 12px; font-size: 0.85em; }
+.scan-select {
+  width: 100%; margin-top: 6px;
+  background: #0d1117; border: 1px solid #1f6feb; border-radius: 6px;
+  color: #c9d1d9; font-family: monospace; font-size: 0.9em; padding: 5px 8px;
+}
+.scan-select option.jk { color: #3fb950; }
+.ok  { color: #3fb950; }
+.err { color: #f85149; }
+</style>
+</head>
+<body>
+
+<div class="tabs">
+  <button class="tab active" onclick="showTab('monitor')">Мониторинг</button>
+  <button class="tab"        onclick="showTab('settings')">Настройки</button>
+  <button class="tab"        onclick="showTab('logs')">Логи</button>
+</div>
+
+<!-- ═══════════════════════ ВКЛАДКА: МОНИТОРИНГ ═══════════════════════════ -->
+<div id="page-monitor" class="page active">
+
+  <div id="offline" class="card" style="color:#f85149;display:none">
+    BMS не подключён
+  </div>
+
+  <div id="content" style="display:none">
+    <div class="card" style="display:flex;justify-content:space-between;align-items:baseline">
+      <div>
+        <span class="big soc" id="soc">--</span><span class="big" style="color:#8b949e"> %</span>
+      </div>
+      <div>
+        <span class="big vbat" id="vbat">--</span><span class="big" style="color:#8b949e"> V</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <table>
+        <tr><th>#</th><th>Напряжение</th><th>Сопротивление</th></tr>
+        <tbody id="cells"></tbody>
+        <tr><td style="color:#8b949e">avg</td><td id="vavg">--</td><td></td></tr>
+      </table>
+    </div>
+
+    <div class="row2">
+      <div class="card">
+        <div class="label">Ток</div>
+        <div class="val" id="current">--</div>
+      </div>
+      <div class="card">
+        <div class="label">Мощность</div>
+        <div class="val" id="power">--</div>
+      </div>
+      <div class="card">
+        <div class="label">Ёмкость</div>
+        <div class="val" id="cap">--</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="label">Температуры</div>
+      <div class="val" id="temps">--</div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <div>
+          <div class="label">Зарядник</div>
+          <div class="val" id="charger">--</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-shrink:0">
+          <button class="btn" id="btn-chg-on"  onclick="setCharger(true)">Включить</button>
+          <button class="btn danger" id="btn-chg-off" onclick="setCharger(false)">Выключить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="status">Подключение...</div>
+</div>
+
+<!-- ═══════════════════════ ВКЛАДКА: НАСТРОЙКИ ════════════════════════════ -->
+<div id="page-settings" class="page">
+
+  <div class="card">
+    <div class="section-title">WiFi</div>
+    <div class="field">
+      <label>Сеть (SSID)</label>
+      <input type="text" id="wifi_ssid" placeholder="Название сети">
+      <select class="scan-select" id="wifi_select" onchange="selectWifi(this)">
+        <option value="" disabled selected>Сканирование...</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Пароль</label>
+      <input type="password" id="wifi_pass" placeholder="Оставьте пустым, чтобы не менять">
+      <div class="hint">Пароль не отображается из соображений безопасности</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">BMS</div>
+    <div class="field">
+      <label>MAC-адрес BMS</label>
+      <input type="text" id="bms_mac" placeholder="c8:47:80:14:a9:dc">
+      <select class="scan-select" id="ble_select" onchange="selectBle(this)">
+        <option value="" disabled selected>Сканирование...</option>
+      </select>
+      <div class="hint">Формат: AA:BB:CC:DD:EE:FF (строчными буквами) · JK BMS отмечены ★ и показаны первыми</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">Управление зарядкой</div>
+    <div class="row2">
+      <div class="field" style="flex:1">
+        <label>Начинать зарядку при SoC ≤ (%)</label>
+        <input type="number" id="soc_start" min="1" max="99">
+      </div>
+      <div class="field" style="flex:1">
+        <label>Заканчивать зарядку при SoC ≥ (%)</label>
+        <input type="number" id="soc_stop" min="2" max="100">
+      </div>
+    </div>
+    <div class="row2">
+      <div class="field" style="flex:1">
+        <label>Старт: ячейка ≤ (мВ)</label>
+        <input type="number" id="cell_min_start_mv" min="2500" max="3500">
+        <div class="hint">Начать заряд если хоть одна ячейка ниже порога</div>
+      </div>
+      <div class="field" style="flex:1">
+        <label>Стоп: ячейка ≥ (мВ)</label>
+        <input type="number" id="cell_max_stop_mv" min="3300" max="3800">
+        <div class="hint">Остановить заряд если хоть одна ячейка выше порога</div>
+      </div>
+    </div>
+    <div class="field">
+      <label>Стоп: суммарное напряжение ≥ (мВ)</label>
+      <input type="number" id="pack_stop_mv" min="10000" max="20000">
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">GPIO зарядника</div>
+    <div class="row2">
+      <div class="field" style="flex:1">
+        <label>Номер пина</label>
+        <input type="number" id="charger_gpio" min="0" max="21">
+      </div>
+      <div class="field" style="flex:1;padding-top:20px">
+        <div class="checkbox-row">
+          <input type="checkbox" id="charger_active_high">
+          <label for="charger_active_high" style="display:inline">
+            Активный уровень — HIGH
+          </label>
+        </div>
+        <div class="hint">Снять флаг, если реле включается нулём</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+    <button class="btn" onclick="saveSettings()">Сохранить</button>
+    <span id="save-msg"></span>
+  </div>
+
+  <div class="card" style="border-color:#da363344">
+    <div class="section-title" style="color:#f85149">Опасная зона</div>
+    <button class="btn danger" onclick="restartDevice()">Перезагрузить устройство</button>
+    <div class="hint" style="margin-top:8px">
+      Необходимо для применения настроек WiFi
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════ ВКЛАДКА: ЛОГИ ════════════════════════════════ -->
+<div id="page-logs" class="page">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <span class="section-title" style="margin:0">Журнал устройства</span>
+      <button class="btn sm" onclick="clearLogDisplay()">Очистить</button>
+    </div>
+    <pre id="log-out" style="font-size:0.78em;max-height:60vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all;color:#8b949e;background:#0d1117;padding:8px;border-radius:4px;min-height:80px">Нет данных</pre>
+  </div>
+</div>
+
+<script>
+/* ─── Переключение вкладок ─────────────────────────────────────────────── */
+
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach((t, i) =>
+    t.classList.toggle('active', ['monitor','settings','logs'][i] === name));
+  document.querySelectorAll('.page').forEach(p =>
+    p.classList.toggle('active', p.id === 'page-' + name));
+  if (name === 'monitor') {
+    fetch('/api/data').then(r => r.text())
+      .then(t => { try { applyData(t); } catch(e) {} }).catch(() => {});
+  }
+  if (name === 'settings') loadSettings();
+  if (name === 'logs') { logActive = true; loadLogs(); }
+  else logActive = false;
+}
+
+/* ─── SSE: получение данных BMS в реальном времени ────────────────────── */
+
+function fmt(v, d) { return v.toFixed(d); }
+
+function applyData(data) {
+  const d = JSON.parse(data);
+
+  if (!d.valid) {
+    document.getElementById('offline').style.display = '';
+    document.getElementById('content').style.display = 'none';
+    document.getElementById('status').textContent = 'BMS не подключён';
+    return;
+  }
+  document.getElementById('offline').style.display = 'none';
+  document.getElementById('content').style.display = '';
+
+  document.getElementById('soc').textContent  = d.soc;
+  document.getElementById('vbat').textContent = fmt(d.battery_voltage / 1000, 3);
+  document.getElementById('vavg').textContent = fmt(d.avg_voltage / 1000, 3) + ' V';
+
+  /* Подсветка мин/макс ячеек */
+  const active = d.cell_voltages.filter(v => v > 0);
+  const minV = Math.min(...active), maxV = Math.max(...active);
+  let rows = '';
+  d.cell_voltages.forEach((v, i) => {
+    if (v === 0) return;
+    const cls = v === minV ? 'min' : v === maxV ? 'max' : '';
+    rows += `<tr><td>${i+1}</td><td class="${cls}">${fmt(v/1000,3)} V</td><td>${d.cell_resistances[i]} mΩ</td></tr>`;
+  });
+  document.getElementById('cells').innerHTML = rows;
+
+  /* Ток и мощность: цвет по знаку */
+  const cur = d.current / 1000, pwr = d.power / 1000;
+  const curEl = document.getElementById('current');
+  curEl.textContent = (cur >= 0 ? '+' : '') + fmt(cur, 2) + ' A';
+  curEl.className   = 'val ' + (cur >= 0 ? 'pos' : 'neg');
+
+  const pwrEl = document.getElementById('power');
+  pwrEl.textContent = (pwr >= 0 ? '+' : '') + fmt(pwr, 1) + ' W';
+  pwrEl.className   = 'val ' + (pwr >= 0 ? 'pos' : 'neg');
+
+  document.getElementById('cap').textContent =
+    fmt(d.cap_remain / 1000, 2) + ' / ' + fmt(d.cap_full / 1000, 2) + ' Ah';
+
+  document.getElementById('temps').innerHTML =
+    'T1 '  + fmt(d.temp1/10,1)   + '°C<br>' +
+    'T2 '  + fmt(d.temp2/10,1)   + '°C<br>' +
+    'MOS ' + fmt(d.temp_mos/10,1) + '°C';
+
+  const chgEl = document.getElementById('charger');
+  chgEl.textContent = d.charger_on ? 'Заряжается' : 'Выключен';
+  chgEl.className   = 'val ' + (d.charger_on ? 'pos' : '');
+  document.getElementById('btn-chg-on').disabled  = d.charger_on;
+  document.getElementById('btn-chg-off').disabled = !d.charger_on;
+
+  document.getElementById('status').textContent =
+    'Обновлено: ' + new Date().toLocaleTimeString();
+}
+
+function startSSE() {
+  const es = new EventSource('/api/events');
+
+  es.onmessage = e => { try { applyData(e.data); } catch(err) {} };
+
+  es.onerror = () => {
+    document.getElementById('status').textContent =
+      'Нет связи — переподключение...';
+  };
+}
+
+startSSE();
+
+function setCharger(on) {
+  fetch('/api/charger', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({on: on})
+  }).then(r => { if (r.ok) {
+    const chgEl = document.getElementById('charger');
+    chgEl.textContent = on ? 'Заряжается' : 'Выключен';
+    chgEl.className   = 'val ' + (on ? 'pos' : '');
+    document.getElementById('btn-chg-on').disabled  = on;
+    document.getElementById('btn-chg-off').disabled = !on;
+  }}).catch(() => {});
+}
+
+/* ─── Настройки ────────────────────────────────────────────────────────── */
+
+function loadSettings() {
+  fetch('/api/settings')
+    .then(r => r.json())
+    .then(s => {
+      document.getElementById('wifi_ssid').value         = s.wifi_ssid        || '';
+      document.getElementById('bms_mac').value           = s.bms_mac          || '';
+      document.getElementById('soc_start').value         = s.soc_start         || '';
+      document.getElementById('soc_stop').value          = s.soc_stop          || '';
+      document.getElementById('cell_min_start_mv').value = s.cell_min_start_mv || '';
+      document.getElementById('cell_max_stop_mv').value  = s.cell_max_stop_mv  || '';
+      document.getElementById('pack_stop_mv').value      = s.pack_stop_mv      || '';
+      document.getElementById('charger_gpio').value      = s.charger_gpio      ?? '';
+      document.getElementById('charger_active_high').checked = !!s.charger_active_high;
+      loadWifiScan(s.wifi_ssid || '');
+      loadBleScan(s.bms_mac   || '');
+    })
+    .catch(() => {
+      document.getElementById('save-msg').textContent = 'Ошибка загрузки настроек';
+      document.getElementById('save-msg').className = 'err';
+    });
+}
+
+function loadWifiScan(savedSsid) {
+  fetch('/api/wifi/scan')
+    .then(r => r.json())
+    .then(data => {
+      const sel = document.getElementById('wifi_select');
+      sel.innerHTML = '<option value="">— выберите сеть —</option>';
+      data.forEach(ap => {
+        const o = document.createElement('option');
+        o.value = ap.ssid;
+        o.textContent = ap.ssid + '  (' + ap.rssi + ' dBm' + (ap.secured ? ', 🔒' : '') + ')';
+        if (ap.ssid === savedSsid) o.selected = true;
+        sel.appendChild(o);
+      });
+    })
+    .catch(() => {});
+}
+
+function loadBleScan(savedMac, retry) {
+  retry = retry || 0;
+  fetch('/api/ble/scan')
+    .then(r => r.json())
+    .then(devs => {
+      const sel = document.getElementById('ble_select');
+      sel.innerHTML = '<option value="">— выберите устройство —</option>';
+
+      const jkItems = [], otherItems = [];
+      devs.forEach(d => {
+        const o = document.createElement('option');
+        o.value = d.addr.toLowerCase();
+        o.textContent = (d.is_jk ? '★ ' : '') + d.addr +
+                        (d.name ? '  ' + d.name : '') + '  (' + d.rssi + ' dBm)';
+        if (savedMac && d.addr.toLowerCase() === savedMac.toLowerCase()) o.selected = true;
+        (d.is_jk ? jkItems : otherItems).push(o);
+      });
+
+      if (jkItems.length > 0) {
+        const grp = document.createElement('optgroup');
+        grp.label = '── JK BMS ──────────────';
+        jkItems.forEach(o => grp.appendChild(o));
+        sel.appendChild(grp);
+      }
+      if (otherItems.length > 0) {
+        const grp = document.createElement('optgroup');
+        grp.label = '── Другие ──────────────';
+        otherItems.forEach(o => grp.appendChild(o));
+        sel.appendChild(grp);
+      }
+
+      /* BLE нужно время накопить устройства — повторяем пока пусто (до 30с) */
+      if (devs.length === 0 && retry < 6)
+        setTimeout(() => loadBleScan(savedMac, retry + 1), 5000);
+    })
+    .catch(() => {
+      if (retry < 6) setTimeout(() => loadBleScan(savedMac, retry + 1), 5000);
+    });
+}
+
+function saveSettings() {
+  const body = {
+    wifi_ssid:           document.getElementById('wifi_ssid').value,
+    wifi_pass:           document.getElementById('wifi_pass').value,
+    bms_mac:             document.getElementById('bms_mac').value,
+    soc_start:           parseInt(document.getElementById('soc_start').value),
+    soc_stop:            parseInt(document.getElementById('soc_stop').value),
+    cell_min_start_mv:   parseInt(document.getElementById('cell_min_start_mv').value),
+    cell_max_stop_mv:    parseInt(document.getElementById('cell_max_stop_mv').value),
+    pack_stop_mv:        parseInt(document.getElementById('pack_stop_mv').value),
+    charger_gpio:        parseInt(document.getElementById('charger_gpio').value),
+    charger_active_high: document.getElementById('charger_active_high').checked,
+  };
+
+  const msg = document.getElementById('save-msg');
+  msg.textContent = 'Сохранение...';
+  msg.className = '';
+
+  fetch('/api/settings', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  })
+  .then(r => r.json())
+  .then(r => {
+    if (r.ok) {
+      msg.textContent = r.restart_required
+        ? 'Сохранено. Перезагрузите устройство для применения WiFi.'
+        : 'Сохранено ✓';
+      msg.className = 'ok';
+    } else {
+      msg.textContent = 'Ошибка'; msg.className = 'err';
+    }
+  })
+  .catch(() => { msg.textContent = 'Ошибка соединения'; msg.className = 'err'; });
+}
+
+function restartDevice() {
+  if (!confirm('Перезагрузить устройство?')) return;
+  fetch('/api/restart', {method:'POST'})
+    .then(() => {
+      document.getElementById('save-msg').textContent = 'Перезагрузка...';
+      document.getElementById('save-msg').className = 'ok';
+    });
+}
+
+/* ─── select handlers ──────────────────────────────────────────────────── */
+
+function selectWifi(sel) {
+  if (sel.value) document.getElementById('wifi_ssid').value = sel.value;
+}
+
+function selectBle(sel) {
+  if (sel.value) document.getElementById('bms_mac').value = sel.value;
+}
+
+/* ─── Логи ─────────────────────────────────────────────────────────────── */
+
+let logNext = 0;
+let logActive = false;
+
+function loadLogs() {
+  if (!logActive) return;
+  fetch('/api/logs?from=' + logNext)
+    .then(r => r.json())
+    .then(data => {
+      if (data.logs && data.logs.length > 0) {
+        const pre = document.getElementById('log-out');
+        if (pre.textContent === 'Нет данных') pre.textContent = '';
+        data.logs.forEach(e => { pre.textContent += e.msg + '\n'; });
+        pre.scrollTop = pre.scrollHeight;
+      }
+      logNext = data.next;
+      if (logActive) setTimeout(loadLogs, 2000);
+    })
+    .catch(() => { if (logActive) setTimeout(loadLogs, 3000); });
+}
+
+function clearLogDisplay() {
+  const pre = document.getElementById('log-out');
+  pre.textContent = 'Нет данных';
+  /* Узнаём текущий конец буфера и начинаем только с него —
+   * старые записи не вернутся, будут видны только новые */
+  fetch('/api/logs?from=0')
+    .then(r => r.json())
+    .then(data => { logNext = data.next; pre.textContent = 'Нет данных'; })
+    .catch(() => {});
+}
+</script>
+</body>
+</html>

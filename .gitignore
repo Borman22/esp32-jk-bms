@@ -1,0 +1,10 @@
+build/
+managed_components/
+cmake-build-debug/
+.cache/
+sdkconfig.old
+sdkconfig.bak
+*.pyc
+__pycache__/
+.idea/
+.vscode/
