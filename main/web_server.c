@@ -389,8 +389,15 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     bool wifi_changed = false;
     cJSON *item;
 
-    /* WiFi */
-    if ((item = cJSON_GetObjectItem(root, "wifi_ssid")) && cJSON_IsString(item)) {
+    /* WiFi (пустой SSID игнорируется — нельзя случайно отключить устройство) */
+    cJSON *wifi_clear = cJSON_GetObjectItem(root, "wifi_clear");
+    if (wifi_clear && cJSON_IsTrue(wifi_clear)) {
+        /* Явный сброс WiFi: очищаем SSID и пароль */
+        if (cfg.wifi_ssid[0] != '\0') wifi_changed = true;
+        cfg.wifi_ssid[0] = '\0';
+        cfg.wifi_pass[0] = '\0';
+    } else if ((item = cJSON_GetObjectItem(root, "wifi_ssid")) && cJSON_IsString(item)
+               && item->valuestring[0] != '\0') {
         if (strcmp(cfg.wifi_ssid, item->valuestring) != 0) wifi_changed = true;
         strlcpy(cfg.wifi_ssid, item->valuestring, sizeof(cfg.wifi_ssid));
     }
@@ -425,8 +432,14 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         cfg.pack_stop_mv      = cJSON_IsNumber(item) ? (uint32_t)item->valueint : 0;
 
     /* GPIO */
-    if ((item = cJSON_GetObjectItem(root, "charger_gpio")) && cJSON_IsNumber(item))
+    if ((item = cJSON_GetObjectItem(root, "charger_gpio")) && cJSON_IsNumber(item)) {
+        if (item->valueint < 0 || item->valueint > 7) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "charger_gpio must be 0-7");
+            return ESP_OK;
+        }
         cfg.charger_gpio = (uint8_t)item->valueint;
+    }
     if ((item = cJSON_GetObjectItem(root, "charger_active_high")) && cJSON_IsBool(item))
         cfg.charger_active_high = cJSON_IsTrue(item);
 
@@ -780,8 +793,8 @@ void web_server_start(void)
         { .uri = "/api/settings",  .method = HTTP_GET,  .handler = settings_get_handler  },
         { .uri = "/api/settings",  .method = HTTP_POST, .handler = settings_post_handler },
         { .uri = "/api/restart",   .method = HTTP_POST, .handler = restart_handler       },
-        { .uri = "/api/wifi/scan", .method = HTTP_GET,  .handler = wifi_scan_handler     },
-        { .uri = "/api/ble/scan",  .method = HTTP_GET,  .handler = ble_scan_handler      },
+        { .uri = "/api/wifi/scan",   .method = HTTP_GET,  .handler = wifi_scan_handler     },
+        { .uri = "/api/ble/scan",    .method = HTTP_GET,  .handler = ble_scan_handler      },
         { .uri = "/api/logs",      .method = HTTP_GET,  .handler = logs_handler          },
         { .uri = "/api/charger",   .method = HTTP_POST, .handler = charger_post_handler  },
         { .uri = "/api/ota",       .method = HTTP_POST, .handler = ota_post_handler       },

@@ -163,6 +163,8 @@ td    { padding: 4px 8px; border-bottom: 1px solid #21262d; }
       <input type="password" id="wifi_pass" placeholder="Оставьте пустым, чтобы не менять">
       <div class="hint">Пароль не отображается из соображений безопасности</div>
     </div>
+    <button class="btn danger sm" onclick="clearWifi()" style="margin-top:8px">Отключиться от WiFi</button>
+    <div class="hint">Устройство перейдёт в режим точки доступа после перезагрузки</div>
   </div>
 
   <div class="card">
@@ -212,7 +214,16 @@ td    { padding: 4px 8px; border-bottom: 1px solid #21262d; }
     <div class="row2">
       <div class="field" style="flex:1">
         <label>Номер пина</label>
-        <input type="number" id="charger_gpio" min="0" max="21">
+        <select id="charger_gpio">
+          <option value="0">GPIO 0</option>
+          <option value="1">GPIO 1</option>
+          <option value="2">GPIO 2</option>
+          <option value="3">GPIO 3</option>
+          <option value="4">GPIO 4</option>
+          <option value="5">GPIO 5</option>
+          <option value="6">GPIO 6</option>
+          <option value="7">GPIO 7</option>
+        </select>
       </div>
       <div class="field" style="flex:1;padding-top:20px">
         <div class="checkbox-row">
@@ -428,13 +439,21 @@ function loadWifiScan(savedSsid) {
     .then(data => {
       const sel = document.getElementById('wifi_select');
       sel.innerHTML = '<option value="">— выберите сеть —</option>';
+      let savedFound = false;
       data.forEach(ap => {
         const o = document.createElement('option');
         o.value = ap.ssid;
         o.textContent = ap.ssid + '  (' + ap.rssi + ' dBm' + (ap.secured ? ', 🔒' : '') + ')';
-        if (ap.ssid === savedSsid) o.selected = true;
+        if (ap.ssid === savedSsid) { o.selected = true; savedFound = true; }
         sel.appendChild(o);
       });
+      if (savedSsid && !savedFound) {
+        const o = document.createElement('option');
+        o.value = savedSsid;
+        o.textContent = savedSsid + '  (текущая)';
+        o.selected = true;
+        sel.insertBefore(o, sel.children[1]);
+      }
     })
     .catch(() => {});
 }
@@ -517,6 +536,17 @@ function saveSettings() {
     }
   })
   .catch(() => { msg.textContent = 'Ошибка соединения'; msg.className = 'err'; });
+}
+
+function clearWifi() {
+  if (!confirm('Отключиться от WiFi? После перезагрузки устройство будет работать как точка доступа.')) return;
+  fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({wifi_clear: true})})
+    .then(r => r.json())
+    .then(() => {
+      const msg = document.getElementById('save-msg');
+      msg.textContent = 'WiFi сброшен. Перезагрузите устройство.';
+      msg.className = 'ok';
+    });
 }
 
 function restartDevice() {

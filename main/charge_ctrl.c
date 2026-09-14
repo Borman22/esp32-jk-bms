@@ -12,6 +12,7 @@ static const char *TAG = "charge_ctrl";
 #define NVS_NAMESPACE      "charge"
 #define NVS_KEY_INPROG     "in_progress"
 #define CHECK_INTERVAL_MS  5000   /* интервал проверки условий зарядки */
+#define LED_GPIO           8      /* встроенный светодиод — повторяет состояние зарядника */
 
 static volatile charge_state_t s_state            = CHARGE_STATE_IDLE;
 static          TaskHandle_t   s_charge_task_handle = NULL;
@@ -28,6 +29,7 @@ static void set_charger(bool on)
     const app_config_t *cfg = settings_get();
     int level = (cfg->charger_active_high ? on : !on) ? 1 : 0;
     gpio_set_level(cfg->charger_gpio, level);
+    gpio_set_level(LED_GPIO, on ? 0 : 1);
 }
 
 /* ── NVS: флаг незавершённого цикла ───────────────────────────────────────── */
@@ -172,15 +174,16 @@ void charge_ctrl_init(void)
 {
     const app_config_t *cfg = settings_get();
 
-    /* Настройка GPIO зарядника */
+    /* Настройка GPIO зарядника и светодиода */
     gpio_config_t io = {
-        .pin_bit_mask = (1ULL << cfg->charger_gpio),
+        .pin_bit_mask = (1ULL << cfg->charger_gpio) | (1ULL << LED_GPIO),
         .mode         = GPIO_MODE_OUTPUT,
         .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_DISABLE,
     };
     gpio_config(&io);
+    gpio_set_level(LED_GPIO, 1);
 
     /* Безопасное начальное состояние: зарядник выключен */
     set_charger(false);
