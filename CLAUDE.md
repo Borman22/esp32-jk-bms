@@ -114,8 +114,23 @@ Pending WiFi (wifi_pend в NVS)?
 
 - До 4 одновременных SSE-клиентов (`SSE_MAX_CLIENTS`). Вытеснение по FIFO (слот 0 — самый старый).
 - Обновление каждые 500 мс (в такт с BMS).
+- SSE-соединение тоже требует авторизации. Браузер отправляет кэшированные Basic Auth credentials автоматически.
 - HTTP-сервер: 7 сокетов, LRU purge, 12 URI-хендлеров.
 - Async handler pattern: `sse_handler` возвращается немедленно, `sse_task` шлёт данные.
+
+---
+
+## Авторизация
+
+HTTP Basic Auth. Включается/выключается через настройки, хранится в `app_config_t` (NVS `"app_cfg"`).
+
+- `auth_pass` пустой → авторизация отключена, все запросы пропускаются
+- `auth_user` пустой → `check_auth()` подставляет `"admin"`. Пустой логин и логин `"admin"` **равнозначны**
+- Все эндпоинты кроме `/favicon.ico` защищены
+- `GET /api/settings` возвращает `auth_enabled` (bool) и `auth_user` (строка), **не** возвращает `auth_pass`
+- `POST /api/settings` с `auth_enabled=false` → очищает оба поля; с `auth_enabled=true` и непустым `auth_pass` → обновляет пароль; с пустым `auth_pass` → оставляет пароль без изменений
+- Изменения вступают в силу немедленно (без перезагрузки)
+- Забыт пароль → BOOT 3 с → сброс всех настроек
 
 ---
 
@@ -123,7 +138,7 @@ Pending WiFi (wifi_pend в NVS)?
 
 | Namespace   | Что хранит |
 |-------------|------------|
-| `"app_cfg"` | Все настройки (`app_config_t`) |
+| `"app_cfg"` | Все настройки (`app_config_t`), включая `auth_user` и `auth_pass` |
 | `"wifi_pend"` | Pending WiFi (ssid + pass, временно) |
 | `"charge"`  | `in_progress` (u8) |
 
@@ -136,7 +151,7 @@ Pending WiFi (wifi_pend в NVS)?
 | GET | `/` | index.html |
 | GET | `/api/data` | Снимок BMS JSON |
 | GET | `/api/events` | SSE-поток (500 мс) |
-| GET | `/api/settings` | Текущие настройки (пароль не возвращается) |
+| GET | `/api/settings` | Текущие настройки (пароли не возвращаются; `auth_user` возвращается) |
 | POST | `/api/settings` | Сохранить настройки; если WiFi изменился → pending + `restart_required:true` |
 | POST | `/api/restart` | Перезагрузка через 500 мс |
 | GET | `/api/wifi/scan` | Кэш WiFi-сетей (сортировка по RSSI) |
