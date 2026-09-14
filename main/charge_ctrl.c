@@ -14,8 +14,9 @@ static const char *TAG = "charge_ctrl";
 #define CHECK_INTERVAL_MS  5000   /* интервал проверки условий зарядки */
 #define LED_GPIO           8      /* встроенный светодиод — повторяет состояние зарядника */
 
-static volatile charge_state_t s_state            = CHARGE_STATE_IDLE;
+static volatile charge_state_t s_state             = CHARGE_STATE_IDLE;
 static          TaskHandle_t   s_charge_task_handle = NULL;
+static          uint8_t        s_active_gpio        = 0xFF; /* текущий выходной пин зарядника */
 
 /* ── GPIO ──────────────────────────────────────────────────────────────────── */
 
@@ -170,23 +171,53 @@ void charge_ctrl_notify_settings_changed(void)
 
 /* ── Публичный API ─────────────────────────────────────────────────────────── */
 
-void charge_ctrl_init(void)
+void charge_ctrl_apply_gpio_settings(void)
 {
     const app_config_t *cfg = settings_get();
 
-    /* Настройка GPIO зарядника и светодиода */
+    /* Освободить старый пин: сначала 0 (очищаем регистр данных), затем INPUT */
+    if (s_active_gpio != 0xFF && s_active_gpio != cfg->charger_gpio) {
+        gpio_set_level(s_active_gpio, 0);
+        gpio_config_t dis = {
+            .pin_bit_mask = (1ULL << s_active_gpio),
+            .mode         = GPIO_MODE_INPUT,
+            .pull_up_en   = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&dis);
+    }
+
+    /* Настроить новый пин зарядника как выход */
     gpio_config_t io = {
-        .pin_bit_mask = (1ULL << cfg->charger_gpio) | (1ULL << LED_GPIO),
+        .pin_bit_mask = (1ULL << cfg->charger_gpio),
         .mode         = GPIO_MODE_OUTPUT,
         .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_DISABLE,
     };
     gpio_config(&io);
+    s_active_gpio = cfg->charger_gpio;
+
+    /* Применить текущее состояние зарядника к новому пину */
+    set_charger(s_state == CHARGE_STATE_CHARGING);
+}
+
+void charge_ctrl_init(void)
+{
+    /* Светодиод — выход с постоянным назначением */
+    gpio_config_t led_io = {
+        .pin_bit_mask = (1ULL << LED_GPIO),
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&led_io);
     gpio_set_level(LED_GPIO, 1);
 
-    /* Безопасное начальное состояние: зарядник выключен */
-    set_charger(false);
+    /* Настроить GPIO зарядника и применить безопасное начальное состояние */
+    charge_ctrl_apply_gpio_settings();
 
     /* Если при последней работе шла зарядка — продолжаем */
     if (load_in_progress()) {
@@ -199,6 +230,7 @@ void charge_ctrl_init(void)
 
     xTaskCreate(charge_task, "charge_ctrl", 3072, NULL, 5, &s_charge_task_handle);
 
+    const app_config_t *cfg = settings_get();
     ESP_LOGI(TAG, "Charge controller ready: GPIO%d active_%s, state=%s",
              cfg->charger_gpio,
              cfg->charger_active_high ? "HIGH" : "LOW",

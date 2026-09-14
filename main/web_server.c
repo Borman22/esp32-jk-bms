@@ -433,9 +433,10 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
 
     /* GPIO */
     if ((item = cJSON_GetObjectItem(root, "charger_gpio")) && cJSON_IsNumber(item)) {
-        if (item->valueint < 0 || item->valueint > 7) {
+        /* GPIO2 запрещён: подтянут к 3.3В через 10кОм на плате (strapping pin) */
+        if (item->valueint < 0 || item->valueint > 7 || item->valueint == 2) {
             cJSON_Delete(root);
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "charger_gpio must be 0-7");
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "charger_gpio must be 0-7 except GPIO2");
             return ESP_OK;
         }
         cfg.charger_gpio = (uint8_t)item->valueint;
@@ -476,6 +477,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_save(&cfg);
     }
 
+    charge_ctrl_apply_gpio_settings();
     charge_ctrl_notify_settings_changed();
 
     /* Ответ: сообщить нужна ли перезагрузка для применения WiFi настроек */
