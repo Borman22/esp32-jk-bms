@@ -44,6 +44,10 @@ td    { padding: 4px 8px; border-bottom: 1px solid #21262d; }
 .section-title { color: #58a6ff; font-size: 0.85em; margin-bottom: 8px; }
 .field  { margin-bottom: 12px; }
 .field label { display: block; color: #8b949e; font-size: 0.85em; margin-bottom: 4px; }
+.field input[type=file] {
+  width: 100%; background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+  color: #c9d1d9; font-family: monospace; font-size: 0.9em; padding: 5px 8px; cursor: pointer;
+}
 .field input[type=text],
 .field input[type=password],
 .field input[type=number] {
@@ -251,9 +255,26 @@ td    { padding: 4px 8px; border-bottom: 1px solid #21262d; }
 
   <div class="card" style="border-color:#da363344">
     <div class="section-title" style="color:#f85149">Опасная зона</div>
-    <button class="btn danger" onclick="restartDevice()">Перезагрузить устройство</button>
+    <div style="margin-bottom:16px">
+      <button class="btn danger" onclick="restartDevice()">Перезагрузить устройство</button>
+      <div class="hint" style="margin-top:6px">Необходимо для применения настроек WiFi</div>
+    </div>
+    <div class="section-title" style="color:#f85149">Обновление прошивки (OTA)</div>
+    <div class="field">
+      <label>Файл прошивки (.bin)</label>
+      <input type="file" id="ota-file" accept=".bin" onchange="otaFileChosen(this)">
+    </div>
+    <div id="ota-progress-wrap" style="display:none;margin-bottom:8px">
+      <div style="background:#21262d;border-radius:4px;height:8px;overflow:hidden">
+        <div id="ota-bar" style="background:#f85149;height:100%;width:0%;transition:width 0.2s"></div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <button class="btn danger" id="ota-btn" onclick="uploadFirmware()" disabled>Прошить</button>
+      <span id="ota-msg" style="font-size:0.85em"></span>
+    </div>
     <div class="hint" style="margin-top:8px">
-      Необходимо для применения настроек WiFi
+      Не отключайте питание во время прошивки. После загрузки устройство перезагрузится автоматически.
     </div>
   </div>
 
@@ -508,6 +529,66 @@ function restartDevice() {
 }
 
 /* ─── select handlers ──────────────────────────────────────────────────── */
+
+function otaFileChosen(input) {
+  const btn = document.getElementById('ota-btn');
+  const msg = document.getElementById('ota-msg');
+  if (input.files.length > 0) {
+    btn.disabled = false;
+    msg.textContent = input.files[0].name + '  (' + (input.files[0].size / 1024).toFixed(0) + ' KB)';
+    msg.className = '';
+  } else {
+    btn.disabled = true;
+    msg.textContent = '';
+  }
+}
+
+function uploadFirmware() {
+  const file = document.getElementById('ota-file').files[0];
+  if (!file) return;
+  const btn  = document.getElementById('ota-btn');
+  const msg  = document.getElementById('ota-msg');
+  const bar  = document.getElementById('ota-bar');
+  const wrap = document.getElementById('ota-progress-wrap');
+
+  btn.disabled = true;
+  wrap.style.display = '';
+  bar.style.width = '0%';
+  msg.textContent = 'Загрузка...';
+  msg.className = '';
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/ota');
+  xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+  xhr.upload.onprogress = e => {
+    if (e.lengthComputable) {
+      const pct = Math.round(e.loaded / e.total * 100);
+      bar.style.width = pct + '%';
+      msg.textContent = pct + '%  (' + (e.loaded/1024).toFixed(0) + ' / ' + (e.total/1024).toFixed(0) + ' KB)';
+    }
+  };
+
+  xhr.onload = () => {
+    bar.style.width = '100%';
+    if (xhr.status === 200) {
+      msg.textContent = 'Готово! Устройство перезагружается...';
+      msg.className = 'ok';
+    } else {
+      msg.textContent = 'Ошибка: ' + xhr.responseText;
+      msg.className = 'err';
+      btn.disabled = false;
+    }
+  };
+
+  xhr.onerror = () => {
+    msg.textContent = 'Ошибка соединения';
+    msg.className = 'err';
+    btn.disabled = false;
+  };
+
+  xhr.send(file);
+}
 
 function toggleAuth(enabled) {
   document.getElementById('auth_fields').style.display = enabled ? '' : 'none';

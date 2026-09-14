@@ -6,6 +6,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_ota_ops.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -658,6 +659,98 @@ static esp_err_t restart_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── POST /api/ota ───────────────────────────────────────────────────────── */
+
+/*
+ * Принимает бинарный образ прошивки (application/octet-stream),
+ * записывает в неактивный OTA-слот, переключает загрузочный раздел
+ * и перезагружает устройство. При ошибке текущий раздел не затрагивается.
+ *
+ * Первый байт образа ESP32 всегда 0xE9 — проверяем для быстрого отклонения
+ * случайных файлов. esp_ota_end() дополнительно верифицирует SHA256.
+ */
+static esp_err_t ota_post_handler(httpd_req_t *req)
+{
+    if (!check_auth(req)) return ESP_OK;
+
+    if (req->content_len == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+        return ESP_FAIL;
+    }
+
+    const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
+    if (!part) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No OTA partition");
+        return ESP_FAIL;
+    }
+
+    esp_ota_handle_t handle;
+    esp_err_t err = esp_ota_begin(part, req->content_len, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_begin: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA begin failed");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "OTA: writing %d bytes to '%s'", req->content_len, part->label);
+
+    char buf[1024];
+    int remaining = req->content_len;
+    int written   = 0;
+
+    while (remaining > 0) {
+        int chunk = remaining < (int)sizeof(buf) ? remaining : (int)sizeof(buf);
+        int n = httpd_req_recv(req, buf, chunk);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (n <= 0) {
+            ESP_LOGE(TAG, "OTA recv error at %d/%d", written, req->content_len);
+            esp_ota_abort(handle);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive error");
+            return ESP_FAIL;
+        }
+
+        /* Проверяем magic-байт первого чанка */
+        if (written == 0 && (uint8_t)buf[0] != 0xE9) {
+            esp_ota_abort(handle);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Not a valid ESP32 firmware");
+            return ESP_FAIL;
+        }
+
+        err = esp_ota_write(handle, buf, n);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_write: %s", esp_err_to_name(err));
+            esp_ota_abort(handle);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
+            return ESP_FAIL;
+        }
+        written   += n;
+        remaining -= n;
+    }
+
+    /* Верифицирует SHA256 образа */
+    err = esp_ota_end(handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_end: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Verify failed");
+        return ESP_FAIL;
+    }
+
+    err = esp_ota_set_boot_partition(part);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Set boot partition failed");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "OTA done: %d bytes, rebooting", written);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"ok\":true}", -1);
+
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
+}
+
 /* ── Запуск сервера ───────────────────────────────────────────────────────── */
 
 void web_server_start(void)
@@ -669,7 +762,8 @@ void web_server_start(void)
     config.stack_size        = 16384;  /* SSE + scan handlers требуют увеличенного стека */
     config.max_open_sockets  = 7;      /* до 7 одновременных подключений (включая SSE) */
     config.lru_purge_enable  = true;   /* автозакрытие старых соединений при нехватке слотов */
-    config.max_uri_handlers  = 12;  /* текущих маршрутов 11, одна единица запаса */
+    config.max_uri_handlers  = 14;  /* текущих маршрутов 12, два запаса */
+    config.recv_wait_timeout = 30;  /* OTA upload: до 1.9 МБ по WiFi, стандартные 5 с мало */
 
     httpd_handle_t server;
     if (httpd_start(&server, &config) != ESP_OK) {
@@ -690,6 +784,7 @@ void web_server_start(void)
         { .uri = "/api/ble/scan",  .method = HTTP_GET,  .handler = ble_scan_handler      },
         { .uri = "/api/logs",      .method = HTTP_GET,  .handler = logs_handler          },
         { .uri = "/api/charger",   .method = HTTP_POST, .handler = charger_post_handler  },
+        { .uri = "/api/ota",       .method = HTTP_POST, .handler = ota_post_handler       },
     };
 
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++)
