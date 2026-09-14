@@ -227,6 +227,28 @@ td    { padding: 4px 8px; border-bottom: 1px solid #21262d; }
     <span id="save-msg"></span>
   </div>
 
+  <div class="card">
+    <div class="section-title">Доступ</div>
+    <div class="field">
+      <div class="checkbox-row">
+        <input type="checkbox" id="auth_enabled" onchange="toggleAuth(this.checked)">
+        <label for="auth_enabled" style="display:inline">Требовать авторизацию</label>
+      </div>
+      <div class="hint">Защищает все страницы и API паролем (HTTP Basic Auth)</div>
+    </div>
+    <div id="auth_fields" style="display:none">
+      <div class="field">
+        <label>Логин</label>
+        <input type="text" id="auth_user" placeholder="admin">
+        <div class="hint">Пусто — будет использоваться «admin»</div>
+      </div>
+      <div class="field">
+        <label>Пароль</label>
+        <input type="password" id="auth_pass" placeholder="Оставьте пустым, чтобы не менять">
+      </div>
+    </div>
+  </div>
+
   <div class="card" style="border-color:#da363344">
     <div class="section-title" style="color:#f85149">Опасная зона</div>
     <button class="btn danger" onclick="restartDevice()">Перезагрузить устройство</button>
@@ -366,6 +388,10 @@ function loadSettings() {
       document.getElementById('pack_stop_mv').value      = s.pack_stop_mv      || '';
       document.getElementById('charger_gpio').value      = s.charger_gpio      ?? '';
       document.getElementById('charger_active_high').checked = !!s.charger_active_high;
+      const authOn = !!s.auth_enabled;
+      document.getElementById('auth_enabled').checked = authOn;
+      toggleAuth(authOn);
+      document.getElementById('auth_user').value = s.auth_user || '';
       loadWifiScan(s.wifi_ssid || '');
       loadBleScan(s.bms_mac   || '');
     })
@@ -444,6 +470,9 @@ function saveSettings() {
     pack_stop_mv:        parseInt(document.getElementById('pack_stop_mv').value),
     charger_gpio:        parseInt(document.getElementById('charger_gpio').value),
     charger_active_high: document.getElementById('charger_active_high').checked,
+    auth_enabled: document.getElementById('auth_enabled').checked,
+    auth_user:    document.getElementById('auth_user').value,
+    auth_pass:    document.getElementById('auth_pass').value,
   };
 
   const msg = document.getElementById('save-msg');
@@ -479,6 +508,10 @@ function restartDevice() {
 }
 
 /* ─── select handlers ──────────────────────────────────────────────────── */
+
+function toggleAuth(enabled) {
+  document.getElementById('auth_fields').style.display = enabled ? '' : 'none';
+}
 
 function selectWifi(sel) {
   if (sel.value) document.getElementById('wifi_ssid').value = sel.value;

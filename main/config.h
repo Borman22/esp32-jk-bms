@@ -21,6 +21,11 @@
 #define CONFIG_WIFI_SSID_MAX_LEN     33   /* максимальная длина SSID + '\0' */
 #define CONFIG_WIFI_PASS_MAX_LEN     65   /* максимальная длина пароля + '\0' */
 
+/* ── Auth ─────────────────────────────────────────────────────────────────── */
+
+#define CONFIG_AUTH_USER_MAX_LEN     33
+#define CONFIG_AUTH_PASS_MAX_LEN     65
+
 /* ── BMS ──────────────────────────────────────────────────────────────────── */
 
 #define CONFIG_BMS_ADDR_LEN          6    /* длина MAC-адреса в байтах */
@@ -70,6 +75,10 @@ typedef struct {
     /* WiFi */
     char wifi_ssid[CONFIG_WIFI_SSID_MAX_LEN];
     char wifi_pass[CONFIG_WIFI_PASS_MAX_LEN];
+
+    /* Auth (HTTP Basic Auth; пустой auth_pass = без авторизации) */
+    char auth_user[CONFIG_AUTH_USER_MAX_LEN];
+    char auth_pass[CONFIG_AUTH_PASS_MAX_LEN];
 
     /* BMS */
     uint8_t bms_addr[CONFIG_BMS_ADDR_LEN];   /* MAC в big-endian (Bluedroid) */

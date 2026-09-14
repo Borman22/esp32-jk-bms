@@ -133,10 +133,84 @@ static int bms_data_to_json(char *dst, size_t max_len)
     );
 }
 
+/* ── HTTP Basic Auth ─────────────────────────────────────────────────────── */
+
+static int b64_val(char c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+/* Декодирует base64 строку. Возвращает длину результата или -1 при ошибке. */
+static int base64_decode(const char *in, char *out, size_t out_size)
+{
+    size_t n = 0;
+    while (in[0] && in[1]) {
+        int a = b64_val(in[0]), b = b64_val(in[1]);
+        if (a < 0 || b < 0) return -1;
+        if (n >= out_size) return -1;
+        out[n++] = (char)((a << 2) | (b >> 4));
+        if (in[2] == '=' || in[2] == '\0') break;
+        int c = b64_val(in[2]);
+        if (c < 0) return -1;
+        if (n >= out_size) return -1;
+        out[n++] = (char)(((b & 0xf) << 4) | (c >> 2));
+        if (in[3] == '=' || in[3] == '\0') break;
+        int d = b64_val(in[3]);
+        if (d < 0) return -1;
+        if (n >= out_size) return -1;
+        out[n++] = (char)(((c & 0x3) << 6) | d);
+        in += 4;
+    }
+    if (n < out_size) out[n] = '\0';
+    return (int)n;
+}
+
+/*
+ * Проверяет Authorization: Basic ... заголовок.
+ * Если пароль не задан (auth_pass пустой) — пропускает всех без проверки.
+ * При отказе сам отправляет 401 и возвращает false.
+ */
+static bool check_auth(httpd_req_t *req)
+{
+    const app_config_t *cfg = settings_get();
+    if (cfg->auth_pass[0] == '\0') return true;
+
+    char hdr[200];
+    if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) != ESP_OK)
+        goto deny;
+    if (strncmp(hdr, "Basic ", 6) != 0) goto deny;
+
+    char decoded[128];
+    if (base64_decode(hdr + 6, decoded, sizeof(decoded)) < 0)
+        goto deny;
+
+    char *colon = strchr(decoded, ':');
+    if (!colon) goto deny;
+    *colon = '\0';
+    const char *got_user = decoded;
+    const char *got_pass = colon + 1;
+
+    const char *want_user = cfg->auth_user[0] ? cfg->auth_user : "admin";
+    if (strcmp(got_user, want_user) == 0 && strcmp(got_pass, cfg->auth_pass) == 0)
+        return true;
+
+deny:
+    httpd_resp_set_status(req, "401 Unauthorized");
+    httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"BMS\"");
+    httpd_resp_send(req, "Unauthorized", -1);
+    return false;
+}
+
 /* ── GET / ───────────────────────────────────────────────────────────────── */
 
 static esp_err_t root_handler(httpd_req_t *req)
 {
+    if (!check_auth(req)) return ESP_OK;
     size_t len = index_html_end - index_html_start;
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, index_html_start, (ssize_t)len);
@@ -154,6 +228,7 @@ static esp_err_t favicon_handler(httpd_req_t *req)
 
 static esp_err_t api_data_handler(httpd_req_t *req)
 {
+    if (!check_auth(req)) return ESP_OK;
     char json[680];
     int len = bms_data_to_json(json, sizeof(json));
 
@@ -210,6 +285,7 @@ static void sse_task(void *arg)
 
 static esp_err_t sse_handler(httpd_req_t *req)
 {
+    if (!check_auth(req)) return ESP_OK;
     httpd_req_t *async_req;
     if (httpd_req_async_handler_begin(req, &async_req) != ESP_OK) {
         httpd_resp_send_500(req);
@@ -250,6 +326,7 @@ static esp_err_t sse_handler(httpd_req_t *req)
 
 static esp_err_t settings_get_handler(httpd_req_t *req)
 {
+    if (!check_auth(req)) return ESP_OK;
     const app_config_t *cfg = settings_get();
 
     char mac_str[CONFIG_BMS_ADDR_STR_LEN];
@@ -261,9 +338,11 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         mac_str[0] = '\0';
     }
 
-    /* Пароль намеренно не отправляем обратно в браузер */
+    /* Пароли намеренно не отправляем обратно в браузер */
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "wifi_ssid",          cfg->wifi_ssid);
+    cJSON_AddBoolToObject  (root, "auth_enabled",       cfg->auth_pass[0] != '\0');
+    cJSON_AddStringToObject(root, "auth_user",          cfg->auth_user);
     cJSON_AddStringToObject(root, "bms_mac",            mac_str);
     cJSON_AddNumberToObject(root, "soc_start",          cfg->soc_start_pct);
     cJSON_AddNumberToObject(root, "soc_stop",           cfg->soc_stop_pct);
@@ -288,6 +367,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
 
 static esp_err_t settings_post_handler(httpd_req_t *req)
 {
+    if (!check_auth(req)) return ESP_OK;
     /* Читаем тело запроса */
     char body[512];
     int received = httpd_req_recv(req, body, sizeof(body) - 1);
@@ -349,6 +429,23 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     if ((item = cJSON_GetObjectItem(root, "charger_active_high")) && cJSON_IsBool(item))
         cfg.charger_active_high = cJSON_IsTrue(item);
 
+    /* Auth */
+    cJSON *auth_en = cJSON_GetObjectItem(root, "auth_enabled");
+    if (auth_en && cJSON_IsBool(auth_en)) {
+        if (cJSON_IsFalse(auth_en)) {
+            /* Авторизация отключена — стираем credentials */
+            cfg.auth_user[0] = '\0';
+            cfg.auth_pass[0] = '\0';
+        } else {
+            if ((item = cJSON_GetObjectItem(root, "auth_user")) && cJSON_IsString(item))
+                strlcpy(cfg.auth_user, item->valuestring, sizeof(cfg.auth_user));
+            /* Пароль обновляем только если пришёл непустой */
+            if ((item = cJSON_GetObjectItem(root, "auth_pass")) && cJSON_IsString(item)
+                && item->valuestring[0] != '\0')
+                strlcpy(cfg.auth_pass, item->valuestring, sizeof(cfg.auth_pass));
+        }
+    }
+
     cJSON_Delete(root);
 
     if (wifi_changed && cfg.wifi_ssid[0] != '\0') {
@@ -387,6 +484,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
  */
 static esp_err_t wifi_scan_handler(httpd_req_t *req)
 {
+    if (!check_auth(req)) return ESP_OK;
     wifi_ap_t aps[WIFI_SCAN_MAX];
     int n = wifi_get_scanned_aps(aps, WIFI_SCAN_MAX);
 
@@ -414,6 +512,7 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req)
 
 static esp_err_t ble_scan_handler(httpd_req_t *req)
 {
+    if (!check_auth(req)) return ESP_OK;
     ble_seen_t *devs = malloc(BLE_SEEN_MAX * sizeof(ble_seen_t));
     if (!devs) { httpd_resp_send_500(req); return ESP_FAIL; }
 
@@ -457,6 +556,7 @@ static esp_err_t ble_scan_handler(httpd_req_t *req)
 
 static esp_err_t charger_post_handler(httpd_req_t *req)
 {
+    if (!check_auth(req)) return ESP_OK;
     char body[64];
     int received = httpd_req_recv(req, body, sizeof(body) - 1);
     if (received <= 0) {
@@ -485,6 +585,7 @@ static esp_err_t charger_post_handler(httpd_req_t *req)
 
 static esp_err_t logs_handler(httpd_req_t *req)
 {
+    if (!check_auth(req)) return ESP_OK;
     char qbuf[64] = {0};
     uint32_t from = 0;
     if (httpd_req_get_url_query_str(req, qbuf, sizeof(qbuf)) == ESP_OK) {
@@ -550,6 +651,7 @@ static void restart_task(void *arg)
 
 static esp_err_t restart_handler(httpd_req_t *req)
 {
+    if (!check_auth(req)) return ESP_OK;
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, "{\"ok\":true}", -1);
     xTaskCreate(restart_task, "restart", 1024, NULL, 5, NULL);

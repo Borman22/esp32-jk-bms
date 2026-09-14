@@ -50,6 +50,10 @@ static void set_defaults(app_config_t *cfg)
     cfg->wifi_ssid[0] = '\0';
     cfg->wifi_pass[0] = '\0';
 
+    /* Auth — по умолчанию без пароля */
+    cfg->auth_user[0] = '\0';
+    cfg->auth_pass[0] = '\0';
+
     /* BMS — адрес не задан */
     cfg->bms_addr_set = false;
 
@@ -84,6 +88,8 @@ void settings_init(void)
 
     load_str  (h, "wifi_ssid",       s_cfg.wifi_ssid, sizeof(s_cfg.wifi_ssid));
     load_str  (h, "wifi_pass",       s_cfg.wifi_pass, sizeof(s_cfg.wifi_pass));
+    load_str  (h, "auth_user",       s_cfg.auth_user, sizeof(s_cfg.auth_user));
+    load_str  (h, "auth_pass",       s_cfg.auth_pass, sizeof(s_cfg.auth_pass));
     load_blob (h, "bms_addr",        s_cfg.bms_addr,  CONFIG_BMS_ADDR_LEN);
     load_u8   (h, "bms_addr_set",    (uint8_t *)&s_cfg.bms_addr_set);
     load_u8   (h, "soc_start",       &s_cfg.soc_start_pct);
@@ -126,6 +132,8 @@ void settings_save(const app_config_t *cfg)
 
     nvs_set_str  (h, "wifi_ssid",      cfg->wifi_ssid);
     nvs_set_str  (h, "wifi_pass",      cfg->wifi_pass);
+    nvs_set_str  (h, "auth_user",      cfg->auth_user);
+    nvs_set_str  (h, "auth_pass",      cfg->auth_pass);
     nvs_set_blob (h, "bms_addr",       cfg->bms_addr, CONFIG_BMS_ADDR_LEN);
     nvs_set_u8   (h, "bms_addr_set",   cfg->bms_addr_set);
     nvs_set_u8   (h, "soc_start",      cfg->soc_start_pct);
