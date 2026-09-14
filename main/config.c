@@ -1,4 +1,5 @@
 #include "config.h"
+#include "board_config.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
@@ -65,7 +66,7 @@ static void set_defaults(app_config_t *cfg)
     cfg->pack_stop_mv       = CONFIG_PACK_STOP_MV_DEFAULT;
 
     /* GPIO */
-    cfg->charger_gpio        = CONFIG_CHARGER_GPIO_DEFAULT;
+    cfg->charger_gpio        = BOARD_CHARGER_GPIO_DEFAULT;
     cfg->charger_active_high = CONFIG_CHARGER_ACTIVE_HIGH_DEFAULT;
 }
 

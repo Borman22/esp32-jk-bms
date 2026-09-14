@@ -1,4 +1,5 @@
 #include "web_server.h"
+#include "board_config.h"
 #include "bms_ble.h"
 #include "charge_ctrl.h"
 #include "config.h"
@@ -433,10 +434,11 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
 
     /* GPIO */
     if ((item = cJSON_GetObjectItem(root, "charger_gpio")) && cJSON_IsNumber(item)) {
-        /* GPIO2 запрещён: подтянут к 3.3В через 10кОм на плате (strapping pin) */
-        if (item->valueint < 0 || item->valueint > 7 || item->valueint == 2) {
+        if (item->valueint < BOARD_CHARGER_GPIO_MIN ||
+            item->valueint > BOARD_CHARGER_GPIO_MAX ||
+            (BOARD_GPIO_FORBIDDEN_MASK & (1ULL << item->valueint))) {
             cJSON_Delete(root);
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "charger_gpio must be 0-7 except GPIO2");
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid charger_gpio for this board");
             return ESP_OK;
         }
         cfg.charger_gpio = (uint8_t)item->valueint;

@@ -5,6 +5,7 @@
 #include "esp_coexist.h"
 #include "driver/gpio.h"
 
+#include "board_config.h"
 #include "config.h"
 #include "wifi_manager.h"
 #include "bms_ble.h"
@@ -23,7 +24,7 @@ static void boot_monitor_task(void *arg)
     int held_ms = 0;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(100));
-        if (gpio_get_level(BOOT_BUTTON_GPIO) == 0) {
+        if (gpio_get_level(BOARD_BOOT_BUTTON_GPIO) == 0) {
             held_ms += 100;
             if (held_ms >= BOOT_HOLD_MS) {
                 ESP_LOGI(TAG, "BOOT held %d ms — resetting all settings", held_ms);
@@ -67,7 +68,7 @@ void app_main(void)
 
     /* Настроить GPIO кнопки BOOT и запустить задачу мониторинга */
     gpio_config_t boot_io = {
-        .pin_bit_mask = (1ULL << BOOT_BUTTON_GPIO),
+        .pin_bit_mask = (1ULL << BOARD_BOOT_BUTTON_GPIO),
         .mode         = GPIO_MODE_INPUT,
         .pull_up_en   = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,

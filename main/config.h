@@ -64,7 +64,7 @@
  * active_high = true:  HIGH = зарядка включена, LOW = выключена
  * active_high = false: LOW  = зарядка включена, HIGH = выключена
  */
-#define CONFIG_CHARGER_GPIO_DEFAULT       3     /* GPIO3 по умолчанию */
+/* значение по умолчанию задаётся в board_config.h как BOARD_CHARGER_GPIO_DEFAULT */
 #define CONFIG_CHARGER_ACTIVE_HIGH_DEFAULT true
 
 /* ══════════════════════════════════════════════════════════════════════════

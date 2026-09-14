@@ -15,7 +15,6 @@ static const char *TAG = "wifi_manager";
 
 #define WIFI_CONNECTED_BIT   BIT0
 #define WIFI_FAIL_BIT        BIT1
-#define BOOT_BUTTON_GPIO     9       /* кнопка BOOT на всех платах ESP32-C3 */
 #define MAX_RETRY            3       /* попыток переподключения перед AP */
 
 static EventGroupHandle_t s_wifi_events;

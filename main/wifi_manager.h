@@ -26,7 +26,6 @@
 
 #define WIFI_CONNECT_TIMEOUT_MS  15000   /* таймаут подключения к STA, мс */
 #define BOOT_HOLD_MS             3000    /* удержание кнопки для сброса, мс */
-#define BOOT_BUTTON_GPIO         9       /* кнопка BOOT на ESP32-C3 */
 #define WIFI_AP_SSID_PREFIX      "BMS-Setup"
 
 /**

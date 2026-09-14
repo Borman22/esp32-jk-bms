@@ -33,6 +33,8 @@
 
 GPIO зарядника и его полярность (`active_high`) настраиваются через веб-интерфейс без перепрошивки.
 
+Аппаратно-зависимые константы (номер LED, кнопка BOOT, допустимые GPIO) вынесены в `main/board_config.h` — при портировании на другую плату достаточно изменить только этот файл.
+
 ---
 
 ## Первый запуск
@@ -441,6 +443,7 @@ NVS расположен на том же адресе `0x9000`, что и в п
 ```
 main/
  ├── main.c           — точка входа, инициализация, boot_monitor_task
+ ├── board_config.h   — аппаратные константы платы (GPIO, маски) — менять при портировании
  ├── config.h / .c    — NVS-настройки, pending WiFi API
  ├── wifi_manager.h / .c  — WiFi: STA/AP/APSTA, pending credentials, reconnect
  ├── bms_ble.h / .c   — BLE GATT-клиент JK-BMS, парсинг, watchdog

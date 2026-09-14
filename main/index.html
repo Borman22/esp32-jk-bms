@@ -214,10 +214,11 @@ td    { padding: 4px 8px; border-bottom: 1px solid #21262d; }
     <div class="row2">
       <div class="field" style="flex:1">
         <label>Номер пина</label>
+        <!-- Список GPIO зависит от платы. При портировании — обновить вместе с board_config.h -->
         <select id="charger_gpio">
           <option value="0">GPIO 0</option>
           <option value="1">GPIO 1</option>
-          <!-- GPIO2 исключён: подтянут к 3.3В через 10кОм на плате (strapping pin) -->
+          <!-- GPIO2 исключён: подтянут к 3.3В через 10кОм (BOARD_GPIO_FORBIDDEN_MASK) -->
           <option value="3">GPIO 3</option>
           <option value="4">GPIO 4</option>
           <option value="5">GPIO 5</option>
