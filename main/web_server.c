@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_ota_ops.h"
+#include "esp_timer.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -643,6 +644,7 @@ static esp_err_t logs_handler(httpd_req_t *req)
 
     cJSON_AddItemToObject(root, "logs", arr);
     cJSON_AddNumberToObject(root, "next", seq_end);
+    cJSON_AddNumberToObject(root, "uptime_ms", (double)(esp_timer_get_time() / 1000LL));
 
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);

@@ -637,16 +637,34 @@ function selectBle(sel) {
 
 let logNext = 0;
 let logActive = false;
+let bootEpoch = null;   /* Date.now() в момент старта МК, вычисляется из uptime_ms */
+
+function formatLogMsg(msg) {
+  if (!bootEpoch) return msg;
+  return msg.replace(/^([IEWDV]) \((\d+)\) /, (_, level, ms) => {
+    const d = new Date(bootEpoch + parseInt(ms));
+    const DD = String(d.getDate()).padStart(2, '0');
+    const MO = String(d.getMonth() + 1).padStart(2, '0');
+    const YY = d.getFullYear();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    const ms3 = String(d.getMilliseconds()).padStart(3, '0');
+    return `${level} (${DD}.${MO}.${YY} ${hh}:${mm}:${ss}.${ms3}) `;
+  });
+}
 
 function loadLogs() {
   if (!logActive) return;
   fetch('/api/logs?from=' + logNext)
     .then(r => r.json())
     .then(data => {
+      if (data.uptime_ms != null)
+        bootEpoch = Date.now() - data.uptime_ms;
       if (data.logs && data.logs.length > 0) {
         const pre = document.getElementById('log-out');
         if (pre.textContent === 'Нет данных') pre.textContent = '';
-        data.logs.forEach(e => { pre.textContent += e.msg + '\n'; });
+        data.logs.forEach(e => { pre.textContent += formatLogMsg(e.msg) + '\n'; });
         pre.scrollTop = pre.scrollHeight;
       }
       logNext = data.next;
