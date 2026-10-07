@@ -14,9 +14,10 @@ static const char *TAG = "charge_ctrl";
 #define NVS_KEY_INPROG     "in_progress"
 #define CHECK_INTERVAL_MS  5000   /* интервал проверки условий зарядки */
 
+/* s_state пишут задача зарядки и HTTP-хендлер (ручное управление), читают все — отсюда volatile */
 static volatile charge_state_t s_state             = CHARGE_STATE_IDLE;
-static          TaskHandle_t   s_charge_task_handle = NULL;
-static          uint8_t        s_active_gpio        = 0xFF; /* текущий выходной пин зарядника */
+static          TaskHandle_t   s_charge_task_handle = NULL;  /* для досрочного пробуждения */
+static          uint8_t        s_active_gpio        = 0xFF;  /* 0xFF = пин ещё не настраивался */
 
 /* ── GPIO ──────────────────────────────────────────────────────────────────── */
 
@@ -27,6 +28,7 @@ static          uint8_t        s_active_gpio        = 0xFF; /* текущий в
  */
 static void set_charger(bool on)
 {
+    /* Светодиод платы повторяет состояние зарядника; он active-low (0 = горит) */
     const app_config_t *cfg = settings_get();
     int level = (cfg->charger_active_high ? on : !on) ? 1 : 0;
     gpio_set_level(cfg->charger_gpio, level);
@@ -35,6 +37,12 @@ static void set_charger(bool on)
 
 /* ── NVS: флаг незавершённого цикла ───────────────────────────────────────── */
 
+/*
+ * Флаг «зарядка идёт» переживает перезагрузку. Если питание пропало посреди
+ * цикла, при следующем включении charge_ctrl_init() продолжит его, не дожидаясь
+ * условия START: прерванный цикл должен дойти до STOP, иначе батарея останется
+ * недозаряженной именно после отключения света.
+ */
 static void save_in_progress(bool in_progress)
 {
     nvs_handle_t h;
@@ -57,7 +65,10 @@ static bool load_in_progress(void)
 
 /* ── Вспомогательные ──────────────────────────────────────────────────────── */
 
-/* Хотя бы одно условие старта задано (ненулевой порог) */
+/*
+ * Хотя бы одно условие старта задано (ненулевой порог). Оба порога равны 0 —
+ * автозарядка выключена пользователем; проверяется только в IDLE (см. charge_task).
+ */
 static bool any_start_configured(const app_config_t *cfg)
 {
     return cfg->soc_start_pct > 0 || cfg->cell_min_start_mv > 0;
@@ -66,8 +77,11 @@ static bool any_start_configured(const app_config_t *cfg)
 /* ── Условия START / STOP ──────────────────────────────────────────────────── */
 
 /*
- * Вернуть true если нужно начать зарядку.
- * Проверяет SoC и минимальные напряжения ячеек.
+ * Вернуть true если нужно начать зарядку (достаточно любого условия).
+ * В reason пишется причина — она попадает в лог, чтобы по журналу было
+ * видно, какое именно условие сработало.
+ * Ячейка с напряжением 0 мВ — не подключена (BMS на 8 каналов, ячеек может
+ * быть меньше), её пропускаем, иначе «0 < min_start» запускала бы зарядку вечно.
  */
 static bool should_start(const bms_data_t *d, const app_config_t *cfg,
                           char *reason, size_t reason_len)
@@ -91,6 +105,7 @@ static bool should_start(const bms_data_t *d, const app_config_t *cfg,
     return false;
 }
 
+/* Зеркально should_start: достаточно любого условия остановки. Нулевой порог = условие отключено. */
 static bool should_stop(const bms_data_t *d, const app_config_t *cfg,
                          char *reason, size_t reason_len)
 {
@@ -120,6 +135,12 @@ static bool should_stop(const bms_data_t *d, const app_config_t *cfg,
 
 /* ── Основная задача ───────────────────────────────────────────────────────── */
 
+/*
+ * Раз в CHECK_INTERVAL_MS смотрим на данные BMS и переключаем реле.
+ * Без валидных данных (BLE оборвался) в IDLE мы не стартуем, в CHARGING не
+ * останавливаемся: реле не дёргается из-за кратковременной потери связи.
+ * Состояние меняется только здесь и в charge_ctrl_set_override().
+ */
 static void charge_task(void *arg)
 {
     while (true) {
@@ -132,7 +153,9 @@ static void charge_task(void *arg)
         switch (s_state) {
 
         case CHARGE_STATE_IDLE:
-            /* Автостарт только если хотя бы одно условие задано */
+            /* Автостарт только если хотя бы одно условие задано.
+               Эта проверка нарочно есть только в IDLE: в CHARGING очистка порогов
+               пользователем не должна останавливать возобновлённую после питания зарядку. */
             if (!any_start_configured(cfg)) break;
 
             if (should_start(&d, cfg, reason, sizeof(reason))) {
@@ -163,6 +186,7 @@ static void charge_task(void *arg)
     }
 }
 
+/* Разбудить задачу, не дожидаясь CHECK_INTERVAL_MS — новые пороги применяются сразу */
 void charge_ctrl_notify_settings_changed(void)
 {
     if (s_charge_task_handle)
@@ -199,10 +223,15 @@ void charge_ctrl_apply_gpio_settings(void)
     gpio_config(&io);
     s_active_gpio = cfg->charger_gpio;
 
-    /* Применить текущее состояние зарядника к новому пину */
+    /* Применить текущее состояние зарядника к новому пину (при инициализации
+       s_state == IDLE, то есть реле гарантированно выключается) */
     set_charger(s_state == CHARGE_STATE_CHARGING);
 }
 
+/*
+ * Порядок важен: сначала GPIO переводятся в безопасное состояние (реле выключено),
+ * и только потом, по флагу из NVS, при необходимости включаются обратно.
+ */
 void charge_ctrl_init(void)
 {
     /* Светодиод — выход с постоянным назначением */
@@ -242,6 +271,11 @@ charge_state_t charge_ctrl_get_state(void)
     return s_state;
 }
 
+/*
+ * Ручное включение/выключение из веба. Работает через то же состояние и тот же
+ * NVS-флаг, что и автоматика, поэтому ручной старт тоже переживает перезагрузку.
+ * Автоматика потом остановит ручную зарядку по условию STOP — это сделано намеренно.
+ */
 void charge_ctrl_set_override(bool enable)
 {
     if (enable) {

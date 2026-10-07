@@ -29,6 +29,7 @@ static const char *TAG = "bms_ble";
 static const uint8_t CMD_INIT[20]     = {0xaa,0x55,0x90,0xeb,0x97,0x00,0xdf,0x52,0x88,0x67,0x9d,0x0a,0x09,0x6b,0x9a,0xf6,0x70,0x9a,0x17,0xfd};
 static const uint8_t CMD_GET_INFO[20] = {0xaa,0x55,0x90,0xeb,0x96,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x10};
 
+/* Состояние GATT-соединения. Меняется в callback-ах Bluedroid, читается из cmd_task. */
 static esp_gatt_if_t       s_gattc_if         = ESP_GATT_IF_NONE;
 static uint16_t            s_conn_id          = 0;
 static esp_bd_addr_t       s_remote_bda;
@@ -37,20 +38,26 @@ static uint16_t            s_svc_start        = 0;
 static uint16_t            s_svc_end          = 0;
 static uint16_t            s_chr_handle       = 0;
 static uint16_t            s_cccd_handle      = 0;
-static bool                s_connecting       = false;
+static bool                s_connecting       = false;  /* open отправлен, ответа ещё нет — не открывать повторно */
 static bool                s_connected        = false;
 
+/* Фрейм JK-BMS приходит несколькими notify-пакетами; здесь он накапливается целиком */
 static uint8_t  s_buf[BUFFER_SIZE];
 static size_t   s_buf_idx     = 0;
-static uint32_t s_parse_count = 0;
-static uint32_t s_notif_count = 0;
+static uint32_t s_parse_count = 0;  /* успешно разобранных фреймов — по нему работает watchdog */
+static uint32_t s_notif_count = 0;  /* принятых notify-пакетов (только для отладки) */
 
+/* Последние данные BMS и список замеченных устройств; оба под одним мьютексом.
+ * Мьютекс здесь допустим: callback-и Bluedroid и читатели — обычные задачи. */
 static bms_data_t        s_data  = {0};
 static SemaphoreHandle_t s_mutex;
 
 static ble_seen_t s_seen[BLE_SEEN_MAX];
 static int        s_seen_count = 0;
 
+/* Пассивный скан: мы только слушаем рекламу, запросов не шлём — достаточно, чтобы
+ * найти BMS по MAC и заполнить список устройств для выбора в настройках.
+ * Окно 80 мс из интервала 100 мс оставляет радио время для WiFi. */
 static esp_ble_scan_params_t s_scan_params = {
     .scan_type          = BLE_SCAN_TYPE_PASSIVE,
     .own_addr_type      = BLE_ADDR_TYPE_PUBLIC,
@@ -84,6 +91,7 @@ static void cmd_task(void *arg);
  */
 static void parse_buffer(void)
 {
+    /* Фрейм короче 256 байт неполный: последнее нужное поле (temp_mos) лежит по смещению 254 */
     if (s_buf_idx < 256) return;
 
     const uint8_t *b = s_buf;
@@ -118,6 +126,11 @@ static void parse_buffer(void)
     ++s_parse_count;
 }
 
+/*
+ * Фрейм не имеет признака конца, поэтому его граница определяется по началу
+ * следующего: увидели заголовок → разбираем то, что накопили, и начинаем заново.
+ * Последствие: данные обновляются с задержкой в один фрейм (~500 мс).
+ */
 static void handle_notification(const uint8_t *data, uint16_t len)
 {
     /* 55 AA EB 90 — сигнатура начала нового фрейма JK-BMS.
@@ -137,6 +150,12 @@ static void handle_notification(const uint8_t *data, uint16_t len)
 
 // ─── Init commands + watchdog task ───────────────────────────────────────────
 
+/*
+ * Запускается после регистрации notify. Выполняет обязательную последовательность
+ * из CLAUDE.md (INIT → GET_INFO → CCCD), затем остаётся сторожем потока данных.
+ * После каждой паузы проверяем s_connected: если связь пропала, пока мы ждали,
+ * писать в закрытое соединение нельзя — задача тихо завершается.
+ */
 static void cmd_task(void *arg)
 {
     vTaskDelay(pdMS_TO_TICKS(200)); /* BMS нужно время обработать подключение */
@@ -164,6 +183,9 @@ static void cmd_task(void *arg)
                                        ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE);
     }
 
+    /* Watchdog: BMS иногда молча перестаёт слать данные при живом соединении.
+       Если за 5 с не разобрано ни одного нового фрейма — рвём связь; DISCONNECT_EVT
+       запустит скан и переподключение. */
     uint32_t last_count = s_parse_count;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(5000));
@@ -184,6 +206,12 @@ static void cmd_task(void *arg)
 
 // ─── Seen device tracking ─────────────────────────────────────────────────────
 
+/*
+ * Разбор рекламного пакета: он состоит из блоков [длина][тип][данные].
+ * Достаём имя (типы 0x08/0x09) и признак JK-BMS — сервис FFE0 в списке 16-битных
+ * UUID (0x02/0x03) либо имя на «JK-». Нужно только для подсказки в интерфейсе,
+ * подключение выполняется по MAC из настроек.
+ */
 static void parse_adv_data(const uint8_t *adv, uint8_t adv_len,
                             char *name_out, bool *is_jk_out)
 {
@@ -216,6 +244,7 @@ static void parse_adv_data(const uint8_t *adv, uint8_t adv_len,
         *is_jk_out = true;
 }
 
+/* Добавить или обновить устройство в списке замеченных (ключ — MAC). При переполнении новые игнорируются. */
 static void seen_update(const esp_ble_gap_cb_param_t *p)
 {
     const uint8_t *bda = p->scan_rst.bda;
@@ -266,6 +295,8 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
     case ESP_GAP_BLE_SCAN_RESULT_EVT:
         if (param->scan_rst.search_evt == ESP_GAP_SEARCH_INQ_RES_EVT) {
             seen_update(param);
+            /* Нашли устройство с MAC из настроек: останавливаем скан и подключаемся.
+               s_connecting защищает от повторного open, пока приходят новые пакеты рекламы. */
             const app_config_t *cfg = settings_get();
             if (!s_connecting && cfg->bms_addr_set &&
                 memcmp(param->scan_rst.bda, cfg->bms_addr, sizeof(esp_bd_addr_t)) == 0) {
@@ -291,6 +322,12 @@ static void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_
 {
     switch (event) {
 
+    /*
+     * Цепочка подключения (каждый шаг — отдельное событие):
+     * REG → скан → OPEN → MTU → поиск сервиса FFE0 → поиск характеристики FFE1 и её CCCD
+     * → register_for_notify → cmd_task. Любая неудача закрывает соединение,
+     * и DISCONNECT_EVT снова запускает скан.
+     */
     case ESP_GATTC_REG_EVT:
         s_gattc_if = gattc_if;
         esp_ble_gap_set_scan_params(&s_scan_params);
@@ -298,6 +335,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_
 
     case ESP_GATTC_OPEN_EVT:
         s_connecting = false;
+        /* Подключиться не удалось — возвращаемся к сканированию */
         if (param->open.status != ESP_GATT_OK) {
             ESP_LOGW(TAG, "Connect failed (%d), scanning again", param->open.status);
             esp_ble_gap_set_scan_params(&s_scan_params);
@@ -400,6 +438,8 @@ static void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_
         }
         break;
 
+    /* Любой разрыв: сбросить всё состояние соединения и данные (valid=false, чтобы
+       интерфейс и зарядка не опирались на устаревшие значения) и искать BMS заново */
     case ESP_GATTC_DISCONNECT_EVT:
         ESP_LOGI(TAG, "Disconnected (reason %d), scanning again",
                  param->disconnect.reason);
@@ -424,6 +464,8 @@ static void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+/* Поднять BLE-стек (Bluedroid, только BLE-режим) и зарегистрировать GATT-клиента.
+ * Дальше всё идёт по событиям: REG_EVT запускает скан. */
 void bms_ble_init(void)
 {
     s_mutex = xSemaphoreCreateMutex();
@@ -441,6 +483,7 @@ void bms_ble_init(void)
     ESP_LOGI(TAG, "Bluedroid BLE initialized, waiting for scan...");
 }
 
+/* Копия последних данных (потокобезопасно). При отсутствии связи out->valid == false. */
 void bms_get_data(bms_data_t *out)
 {
     xSemaphoreTake(s_mutex, portMAX_DELAY);

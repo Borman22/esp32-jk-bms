@@ -13,6 +13,12 @@ static app_config_t s_cfg;
 
 /* ── Вспомогательные функции чтения/записи NVS ───────────────────────────── */
 
+/*
+ * Все load_* молча игнорируют ошибку чтения: «ключа нет» — штатная ситуация
+ * (первый запуск, или поле добавили в новой версии прошивки). В этом случае в
+ * dst остаётся значение, выставленное set_defaults(). Поэтому после OTA-обновления
+ * с новыми полями старые настройки не теряются, а новые получают значения по умолчанию.
+ */
 static void load_str(nvs_handle_t h, const char *key, char *dst, size_t max_len)
 {
     size_t len = max_len;
@@ -43,6 +49,7 @@ static void load_blob(nvs_handle_t h, const char *key, void *dst, size_t len)
 
 /* ── Заполнить структуру заводскими значениями ───────────────────────────── */
 
+/* Нулевой порог зарядки означает «условие отключено», см. should_start/should_stop */
 static void set_defaults(app_config_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
@@ -74,6 +81,7 @@ static void set_defaults(app_config_t *cfg)
 
 void settings_init(void)
 {
+    /* Сначала заводские значения, затем поверх них — всё, что нашлось в NVS */
     set_defaults(&s_cfg);
 
     nvs_handle_t h;
@@ -87,6 +95,7 @@ void settings_init(void)
         return;
     }
 
+    /* Имена ключей NVS ограничены 15 символами — отсюда сокращения вроде chg_act_high */
     load_str  (h, "wifi_ssid",       s_cfg.wifi_ssid, sizeof(s_cfg.wifi_ssid));
     load_str  (h, "wifi_pass",       s_cfg.wifi_pass, sizeof(s_cfg.wifi_pass));
     load_str  (h, "auth_user",       s_cfg.auth_user, sizeof(s_cfg.auth_user));
@@ -103,6 +112,7 @@ void settings_init(void)
 
     nvs_close(h);
 
+    /* Сводка для лога: порог 0 выводим как "off", чтобы было видно, какие условия активны */
     char soc_start[8], soc_stop[8], cell_start[12], cell_stop[12], pack_stop[16];
     if (s_cfg.soc_start_pct)     snprintf(soc_start,  sizeof(soc_start),  "%u%%",   s_cfg.soc_start_pct);
     else                         snprintf(soc_start,  sizeof(soc_start),  "off");
@@ -119,6 +129,12 @@ void settings_init(void)
              s_cfg.wifi_ssid, soc_start, soc_stop, cell_start, cell_stop, pack_stop);
 }
 
+/*
+ * Возвращает указатель на живую копию в RAM, а не снимок. Читатели из разных задач
+ * (charge_ctrl, web_server, wifi_manager) видят изменения сразу после settings_save(),
+ * что и обеспечивает применение настроек без перезагрузки. Блокировок нет: поля
+ * читаются независимо, а запись происходит редко и только из HTTP-обработчика.
+ */
 const app_config_t *settings_get(void)
 {
     return &s_cfg;
@@ -126,8 +142,11 @@ const app_config_t *settings_get(void)
 
 void settings_save(const app_config_t *cfg)
 {
-    s_cfg = *cfg;   /* обновить копию в RAM */
+    s_cfg = *cfg;   /* сначала RAM: настройки действуют сразу, даже если запись в NVS не удастся */
 
+    /* Если NVS недоступен совсем, дальше работать бессмысленно — паника допустима.
+       Отдельные nvs_set_* не проверяются: при сбое достаточно потери одного поля,
+       остальное сохранится, а при следующем сохранении всё запишется заново. */
     nvs_handle_t h;
     ESP_ERROR_CHECK(nvs_open(NVS_NS, NVS_READWRITE, &h));
 
@@ -150,6 +169,11 @@ void settings_save(const app_config_t *cfg)
     ESP_LOGI(TAG, "Config saved");
 }
 
+/*
+ * Сброс по долгому нажатию BOOT. Стирается только namespace "app_cfg"
+ * (в том числе пароль веб-интерфейса — так восстанавливают доступ).
+ * "wifi_pend" и "charge" не затрагиваются.
+ */
 void settings_reset(void)
 {
     ESP_LOGI(TAG, "Resetting config to defaults");
@@ -164,6 +188,12 @@ void settings_reset(void)
 
 /* ── Pending WiFi (двухэтапная фиксация) ─────────────────────────────────── */
 
+/*
+ * Новая WiFi-сеть сначала кладётся сюда, а не в app_cfg. После перезагрузки
+ * wifi_manager пробует её первой: успех → переносит в app_cfg и чистит pending,
+ * провал → чистит pending и возвращается к старой сети. Так опечатка в пароле
+ * не лишает устройство доступа к сети.
+ */
 #define NVS_NS_PEND "wifi_pend"
 
 void settings_save_pending_wifi(const char *ssid, const char *pass)
@@ -182,6 +212,8 @@ bool settings_load_pending_wifi(char *ssid, size_t ssid_len,
 {
     nvs_handle_t h;
     if (nvs_open(NVS_NS_PEND, NVS_READONLY, &h) != ESP_OK) return false;
+    /* nvs_get_str принимает длину по указателю и перезаписывает её, поэтому каждый
+       раз передаётся временная копия (compound literal), а не ssid_len/pass_len */
     bool ok = nvs_get_str(h, "ssid", ssid, &(size_t){ssid_len}) == ESP_OK &&
               nvs_get_str(h, "pass", pass, &(size_t){pass_len}) == ESP_OK;
     nvs_close(h);

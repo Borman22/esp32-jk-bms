@@ -17,6 +17,7 @@ static const char *TAG = "wifi_manager";
 #define WIFI_FAIL_BIT        BIT1
 #define MAX_RETRY            3       /* попыток переподключения перед AP */
 
+/* Биты нужны только start_sta(): обработчик событий сообщает ему «получили IP» или «исчерпали попытки» */
 static EventGroupHandle_t s_wifi_events;
 static bool               s_ap_mode              = false;
 static bool               s_connected            = false;
@@ -36,6 +37,13 @@ static int       s_scan_count  = 0;
 
 /* ── Обработчик событий WiFi ─────────────────────────────────────────────── */
 
+/*
+ * Единая точка реакции на события WiFi/IP. Решает, переподключаться ли:
+ *   - до первого успешного подключения — не больше MAX_RETRY попыток, потом FAIL
+ *     (start_sta вернёт false и мы уйдём в AP);
+ *   - после первого IP или в APSTA-режиме — бесконечно: пропал роутер или WiFi
+ *     моргнул — устройство должно само вернуться в сеть.
+ */
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                 int32_t id, void *data)
 {
@@ -77,13 +85,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
 
 /* ── Скан WiFi ДО поднятия AP ────────────────────────────────────────────── */
 
-/*
- * Запускается в STA-режиме, пока AP ещё не поднята и клиентов нет.
- * Это единственный безопасный способ сканировать на ESP32-C3: single-radio
- * не может сканировать без прерывания AP-beacons, что рвёт соединение клиентов.
- * Результаты сохраняются в s_scan_result и доступны через wifi_get_scanned_aps().
- */
-/* Сортировка закэшированных результатов по убыванию RSSI */
+/* Сортировка закэшированных результатов по убыванию RSSI (сильные сети сверху) */
 static void sort_scan_cache(void)
 {
     for (int i = 0; i < s_scan_count - 1; i++)
@@ -98,6 +100,10 @@ static void sort_scan_cache(void)
 /*
  * Скан до поднятия AP: WiFi ещё не запущен, запускаем его в STA-режиме
  * только для скана, затем останавливаем.
+ * Зачем так: радио одно, и скан при работающей AP прерывает её beacon'ы, что
+ * рвёт соединение клиентов — а список сетей в настройках нужен именно тем, кто
+ * подключился к AP. Поэтому сканируем заранее, пока клиентов нет, и кэшируем
+ * результат в s_scan_result (отдаётся через wifi_get_scanned_aps()).
  */
 static void prescan_wifi(void)
 {
@@ -127,6 +133,10 @@ static void prescan_wifi(void)
 
 /* ── Поднять точку доступа ───────────────────────────────────────────────── */
 
+/*
+ * AP называется BMS-Setup-XXXXXX (последние 3 байта MAC), чтобы несколько
+ * устройств рядом не путались. Сеть открытая — это режим первичной настройки.
+ */
 static void start_ap(void)
 {
     uint8_t mac[6];
@@ -176,9 +186,16 @@ static void start_ap(void)
 
 /* ── Подключиться к WiFi как станция ─────────────────────────────────────── */
 
+/*
+ * Подключиться к сети и ждать результата до WIFI_CONNECT_TIMEOUT_MS.
+ * true — получен IP; false — провал, WiFi остановлен (вызывающий поднимет AP).
+ * Вызывается и для pending-, и для основных credentials, поэтому начало
+ * сбрасывает состояние прошлой попытки.
+ */
 static bool start_sta(const char *ssid, const char *pass)
 {
-    /* Сбрасываем счётчик и биты от предыдущего вызова (например провал pending) */
+    /* Сбрасываем счётчик и биты от предыдущего вызова (например провал pending):
+       иначе старый WIFI_FAIL_BIT заставил бы второй вызов сразу вернуть false */
     s_retry = 0;
     xEventGroupClearBits(s_wifi_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
 
@@ -217,6 +234,11 @@ static bool start_sta(const char *ssid, const char *pass)
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
+/*
+ * Выбор режима при старте (подробно — в README, «Режимы работы WiFi»):
+ *   pending-сеть → сохранённая сеть → AP/APSTA. Блокирует вызывающего до
+ * подключения или таймаута, поэтому BLE и веб стартуют уже после.
+ */
 void wifi_manager_init(void)
 {
     s_wifi_events = xEventGroupCreate();
@@ -297,6 +319,7 @@ bool wifi_manager_is_ap_mode(void)
     return s_ap_mode;
 }
 
+/* Кэш результатов скана (отсортирован по RSSI) — без нового сканирования, безопасно при работающей AP */
 int wifi_get_scanned_aps(wifi_ap_t *out, int max_count)
 {
     int n = s_scan_count < max_count ? s_scan_count : max_count;
@@ -304,6 +327,7 @@ int wifi_get_scanned_aps(wifi_ap_t *out, int max_count)
     return n;
 }
 
+/* Выполнить скан сейчас (блокирующий). Дубликаты SSID схлопываются, скрытые сети пропускаются. */
 int wifi_scan_aps(wifi_ap_t *out, int max_count)
 {
     /* Пассивный скан: просто слушаем beacon'ы, не посылаем probe request'ы.
