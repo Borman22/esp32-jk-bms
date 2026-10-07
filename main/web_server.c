@@ -2,6 +2,7 @@
 #include "board_config.h"
 #include "bms_ble.h"
 #include "charge_ctrl.h"
+#include "stats.h"
 #include "config.h"
 #include "wifi_manager.h"
 #include "esp_http_server.h"
@@ -18,6 +19,8 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
+#include <sys/time.h>
 
 static const char *TAG = "web_server";
 
@@ -29,12 +32,24 @@ extern const char index_html_end[]   asm("_binary_index_html_end");
 #define LOG_BUF_COUNT  80
 #define LOG_BUF_LEN    160
 
+/*
+ * Кольцо последних LOG_BUF_COUNT строк лога. Каждая строка получает сквозной
+ * номер seq; браузер запрашивает «всё, начиная с N» (/api/logs?from=N) и так
+ * получает только новое. Слот строки = seq % LOG_BUF_COUNT.
+ */
 typedef struct { uint32_t seq; char text[LOG_BUF_LEN]; } log_entry_t;
 
 static log_entry_t  s_log_buf[LOG_BUF_COUNT];
 static uint32_t     s_log_seq = 0;
+/*
+ * Именно spinlock (portMUX), а не мьютекс — не менять. Хук вызывается из любого
+ * контекста, включая callback-и Bluedroid и прерывания, где блокирующий мьютекс
+ * FreeRTOS приводит к дедлоку. Критические секции поэтому предельно короткие:
+ * форматирование строки делается ДО захвата, внутри только memcpy.
+ */
 static portMUX_TYPE s_log_mux = portMUX_INITIALIZER_UNLOCKED;
 
+/* Вырезать ANSI-цвета ("\033[0;32m"), которыми ESP_LOG раскрашивает уровни, — в вебе они мусор */
 static void strip_ansi(char *s)
 {
     char *dst = s;
@@ -50,6 +65,10 @@ static void strip_ansi(char *s)
     *dst = '\0';
 }
 
+/*
+ * Подменяет вывод ESP_LOG: строка уходит и в UART (как обычно), и в кольцевой
+ * буфер для вкладки «Логи». Возвращает то, что вернул vprintf.
+ */
 static int log_vprintf_hook(const char *fmt, va_list args)
 {
     /* va_list можно пройти только один раз: vprintf исчерпывает args,
@@ -78,6 +97,7 @@ static int log_vprintf_hook(const char *fmt, va_list args)
     return ret;
 }
 
+/* Вызывать первой в app_main: перехватываются только сообщения, появившиеся после установки хука */
 void web_server_log_init(void)
 {
     esp_log_set_vprintf(log_vprintf_hook);
@@ -87,6 +107,8 @@ void web_server_log_init(void)
 
 #define SSE_MAX_CLIENTS 4
 
+/* Список активных SSE-соединений. s_sse_mutex защищает его от sse_handler (добавляет
+ * клиентов в задаче httpd) и sse_task (рассылает данные и удаляет оборвавшихся). */
 static SemaphoreHandle_t s_sse_mutex                    = NULL;
 static httpd_req_t      *s_sse_clients[SSE_MAX_CLIENTS] = {NULL};
 
@@ -138,6 +160,7 @@ static int bms_data_to_json(char *dst, size_t max_len)
 
 /* ── HTTP Basic Auth ─────────────────────────────────────────────────────── */
 
+/* Значение символа base64 (0–63) или -1, если символ не из алфавита */
 static int b64_val(char c)
 {
     if (c >= 'A' && c <= 'Z') return c - 'A';
@@ -220,6 +243,8 @@ static esp_err_t root_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* Единственный маршрут без авторизации: браузер запрашивает favicon сам, без
+ * учётных данных; пустой ответ 204 избавляет от 404 в логах */
 static esp_err_t favicon_handler(httpd_req_t *req)
 {
     httpd_resp_set_status(req, "204 No Content");
@@ -229,6 +254,8 @@ static esp_err_t favicon_handler(httpd_req_t *req)
 
 /* ── GET /api/data ───────────────────────────────────────────────────────── */
 
+/* Разовый снимок данных BMS. Страница использует его для мгновенной отрисовки
+ * при переключении вкладок, не дожидаясь очередного SSE-события. */
 static esp_err_t api_data_handler(httpd_req_t *req)
 {
     if (!check_auth(req)) return ESP_OK;
@@ -252,6 +279,7 @@ static esp_err_t api_data_handler(httpd_req_t *req)
  */
 static void sse_task(void *arg)
 {
+    /* Буферы статические по размеру JSON (~600 байт при 8 ячейках); лежат на стеке задачи */
     char buf[700];
     char json[680];
 
@@ -264,7 +292,7 @@ static void sse_task(void *arg)
         memcpy(clients, s_sse_clients, sizeof(clients));
         xSemaphoreGive(s_sse_mutex);
 
-        /* Проверяем, есть ли хоть один активный клиент */
+        /* Без клиентов JSON не формируем — не тратим время и не мешаем BLE */
         bool any = false;
         for (int i = 0; i < SSE_MAX_CLIENTS; i++) if (clients[i]) { any = true; break; }
         if (!any) continue;
@@ -274,6 +302,9 @@ static void sse_task(void *arg)
 
         for (int i = 0; i < SSE_MAX_CLIENTS; i++) {
             if (!clients[i]) continue;
+            /* Ошибка отправки = клиент ушёл (закрыл вкладку, пропал WiFi): освобождаем слот.
+               Повторная проверка под мьютексом нужна, т.к. слот мог быть вытеснен
+               новым клиентом, пока мы отправляли. */
             if (httpd_resp_send_chunk(clients[i], buf, len) != ESP_OK) {
                 xSemaphoreTake(s_sse_mutex, portMAX_DELAY);
                 if (s_sse_clients[i] == clients[i]) {
@@ -286,6 +317,7 @@ static void sse_task(void *arg)
     }
 }
 
+/* Регистрирует SSE-клиента и сразу возвращается; дальше им занимается sse_task */
 static esp_err_t sse_handler(httpd_req_t *req)
 {
     if (!check_auth(req)) return ESP_OK;
@@ -368,6 +400,18 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
 
 /* ── POST /api/settings ──────────────────────────────────────────────────── */
 
+/*
+ * Частичное обновление: берём текущие настройки и меняем только те поля, что
+ * пришли в JSON, остальные остаются как были. Поэтому страница может слать как
+ * всю форму, так и один флаг (например {"wifi_clear":true}).
+ * Правила по полям:
+ *   - wifi_ssid/wifi_pass: пустые значения игнорируются (нельзя случайно стереть);
+ *     новая сеть не применяется сразу, а уходит в pending (см. ниже);
+ *   - пороги зарядки: пустое/нечисловое значение = 0 = условие отключено;
+ *   - charger_gpio: проверяется по белому списку платы (board_config.h);
+ *   - auth: false стирает логин и пароль, true с пустым паролем пароль не меняет.
+ * Валидация только здесь, на границе системы: дальше код доверяет settings_get().
+ */
 static esp_err_t settings_post_handler(httpd_req_t *req)
 {
     if (!check_auth(req)) return ESP_OK;
@@ -467,7 +511,8 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     if (wifi_changed && cfg.wifi_ssid[0] != '\0') {
-        /* Новые WiFi-данные сохраняем как «кандидат»: если пароль неверный,
+        /* Основные credentials в save_cfg возвращаем прежние: меняется только pending.
+         * Новые WiFi-данные сохраняем как «кандидат»: если пароль неверный,
          * устройство после перезагрузки вернётся к старым credentials и
          * останется доступным. Остальные настройки сохраняем сразу. */
         const app_config_t *cur = settings_get();
@@ -480,6 +525,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_save(&cfg);
     }
 
+    /* Пин, полярность и пороги действуют сразу, без перезагрузки */
     charge_ctrl_apply_gpio_settings();
     charge_ctrl_notify_settings_changed();
 
@@ -529,6 +575,7 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req)
 
 /* ── GET /api/ble/scan ───────────────────────────────────────────────────── */
 
+/* Список замеченных при BLE-скане устройств — для выпадающего списка выбора BMS в настройках */
 static esp_err_t ble_scan_handler(httpd_req_t *req)
 {
     if (!check_auth(req)) return ESP_OK;
@@ -573,6 +620,7 @@ static esp_err_t ble_scan_handler(httpd_req_t *req)
 
 /* ── POST /api/charger ───────────────────────────────────────────────────── */
 
+/* Ручное включение/выключение зарядника кнопками на вкладке «Мониторинг» */
 static esp_err_t charger_post_handler(httpd_req_t *req)
 {
     if (!check_auth(req)) return ESP_OK;
@@ -600,8 +648,86 @@ static esp_err_t charger_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── GET /api/stats ──────────────────────────────────────────────────────── */
+
+static esp_err_t stats_handler(httpd_req_t *req)
+{
+    if (!check_auth(req)) return ESP_OK;
+
+    /* Ручная сборка JSON: cJSON на 64 записи слишком расточителен по куче */
+    const size_t cap = 256 + STATS_MAX * 160;
+    stats_rec_t *recs = malloc(STATS_MAX * sizeof(stats_rec_t));
+    char *buf = malloc(cap);
+    if (!recs || !buf) {
+        free(recs); free(buf);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    uint32_t boot;
+    int n = stats_snapshot(recs, &boot);
+    int len = snprintf(buf, cap, "{\"boot\":%u,\"up\":%u,\"synced\":%s,\"items\":[",
+                       (unsigned)boot, (unsigned)(esp_timer_get_time() / 1000000LL),
+                       stats_clock_synced() ? "true" : "false");
+    for (int i = 0; i < n; i++) {
+        const stats_rec_t *r = &recs[i];
+        len += snprintf(buf + len, cap - len,
+            "%s{\"t\":%u,\"s\":%u,\"boot\":%u,\"ts\":%u,\"up\":%u,\"dur\":%u,\"a0\":%u,\"a1\":%u}",
+            i ? "," : "", r->type, r->state, (unsigned)r->boot, (unsigned)r->ts_start,
+            (unsigned)r->up_start, (unsigned)r->dur_s, (unsigned)r->mah_start, (unsigned)r->mah_end);
+    }
+    snprintf(buf + len, cap - len, "]}");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_send(req, buf, -1);
+    free(recs); free(buf);
+    return ESP_OK;
+}
+
+/* ── POST /api/time ──────────────────────────────────────────────────────── */
+
+/*
+ * Браузер сообщает текущее unix-время. Принимается только если часы ещё не
+ * установлены (иначе SNTP или предыдущая синхронизация точнее).
+ */
+static esp_err_t time_post_handler(httpd_req_t *req)
+{
+    if (!check_auth(req)) return ESP_OK;
+    char body[48];
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+        return ESP_FAIL;
+    }
+    body[received] = '\0';
+
+    cJSON *root = cJSON_Parse(body);
+    cJSON *ep   = root ? cJSON_GetObjectItem(root, "epoch") : NULL;
+    if (!ep || !cJSON_IsNumber(ep) || ep->valuedouble < 1700000000.0) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid epoch");
+        return ESP_FAIL;
+    }
+    if (!stats_clock_synced()) {
+        struct timeval tv = { .tv_sec = (time_t)ep->valuedouble, .tv_usec = 0 };
+        settimeofday(&tv, NULL);
+        ESP_LOGI(TAG, "Clock set from browser");
+    }
+    cJSON_Delete(root);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"ok\":true}", -1);
+    return ESP_OK;
+}
+
 /* ── GET /api/logs ───────────────────────────────────────────────────────── */
 
+/*
+ * Отдаёт строки лога с номера from. Если нужные строки уже затёрты кольцом,
+ * начинаем с самой старой из имеющихся. uptime_ms браузер использует, чтобы
+ * вычислить реальное время старта МК и превратить миллисекунды из лога в даты.
+ */
 static esp_err_t logs_handler(httpd_req_t *req)
 {
     if (!check_auth(req)) return ESP_OK;
@@ -720,6 +846,7 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     while (remaining > 0) {
         int chunk = remaining < (int)sizeof(buf) ? remaining : (int)sizeof(buf);
         int n = httpd_req_recv(req, buf, chunk);
+        /* Таймаут приёма — не ошибка: большой образ идёт по WiFi неравномерно, ждём дальше */
         if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
         if (n <= 0) {
             ESP_LOGE(TAG, "OTA recv error at %d/%d", written, req->content_len);
@@ -754,6 +881,8 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    /* Только после успешной проверки переключаем загрузку на новый слот;
+       до этого момента устройство продолжает грузиться со старой прошивки */
     err = esp_ota_set_boot_partition(part);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_set_boot_partition: %s", esp_err_to_name(err));
@@ -765,6 +894,7 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, "{\"ok\":true}", -1);
 
+    /* Дать ответу уйти в сеть, иначе страница увидит обрыв вместо «ok» */
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();
     return ESP_OK;
@@ -781,7 +911,7 @@ void web_server_start(void)
     config.stack_size        = 16384;  /* SSE + scan handlers требуют увеличенного стека */
     config.max_open_sockets  = 7;      /* до 7 одновременных подключений (включая SSE) */
     config.lru_purge_enable  = true;   /* автозакрытие старых соединений при нехватке слотов */
-    config.max_uri_handlers  = 14;  /* текущих маршрутов 12, два запаса */
+    config.max_uri_handlers  = 16;  /* текущих маршрутов 14, два запаса */
     config.recv_wait_timeout = 30;  /* OTA upload: до 1.9 МБ по WiFi, стандартные 5 с мало */
 
     httpd_handle_t server;
@@ -804,6 +934,8 @@ void web_server_start(void)
         { .uri = "/api/logs",      .method = HTTP_GET,  .handler = logs_handler          },
         { .uri = "/api/charger",   .method = HTTP_POST, .handler = charger_post_handler  },
         { .uri = "/api/ota",       .method = HTTP_POST, .handler = ota_post_handler       },
+        { .uri = "/api/stats",     .method = HTTP_GET,  .handler = stats_handler         },
+        { .uri = "/api/time",      .method = HTTP_POST, .handler = time_post_handler     },
     };
 
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++)

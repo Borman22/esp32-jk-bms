@@ -10,6 +10,7 @@
 #include "wifi_manager.h"
 #include "bms_ble.h"
 #include "charge_ctrl.h"
+#include "stats.h"
 #include "web_server.h"
 
 static const char *TAG = "main";
@@ -50,10 +51,13 @@ void app_main(void)
     esp_log_level_set("wifi_manager", ESP_LOG_INFO);
     esp_log_level_set("bms_ble",      ESP_LOG_INFO);
     esp_log_level_set("charge_ctrl",  ESP_LOG_INFO);
+    esp_log_level_set("stats",        ESP_LOG_INFO);
     esp_log_level_set("web_server",   ESP_LOG_INFO);
-    /* Подавить штатные WARN от httpd: 404 favicon и EAGAIN на отправке */
+    /* Подавить штатные WARN от httpd: 404 favicon, EAGAIN на отправке,
+       оборванные/неполные запросы (parse_block: incomplete) */
     esp_log_level_set("httpd_uri",    ESP_LOG_ERROR);
     esp_log_level_set("httpd_txrx",   ESP_LOG_ERROR);
+    esp_log_level_set("httpd_parse",  ESP_LOG_ERROR);
 
     /* NVS должен быть инициализирован первым — от него зависят config и WiFi */
     esp_err_t ret = nvs_flash_init();
@@ -89,6 +93,9 @@ void app_main(void)
 
     /* Запустить контроллер зарядки (GPIO + NVS resume) */
     charge_ctrl_init();
+
+    /* Журнал сессий разряда/заряда */
+    stats_init();
 
     /* Запустить HTTP сервер (мониторинг + настройки) */
     web_server_start();

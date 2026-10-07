@@ -80,6 +80,7 @@ td    { padding: 4px 8px; border-bottom: 1px solid #21262d; }
 
 <div class="tabs">
   <button class="tab active" onclick="showTab('monitor')">Мониторинг</button>
+  <button class="tab"        onclick="showTab('stats')">Статистика</button>
   <button class="tab"        onclick="showTab('settings')">Настройки</button>
   <button class="tab"        onclick="showTab('logs')">Логи</button>
 </div>
@@ -292,6 +293,22 @@ td    { padding: 4px 8px; border-bottom: 1px solid #21262d; }
 
 </div>
 
+<!-- ═══════════════════════ ВКЛАДКА: СТАТИСТИКА ══════════════════════════ -->
+<div id="page-stats" class="page">
+  <div class="card">
+    <div class="section-title">Сессии разряда и заряда</div>
+    <div id="stats-empty" class="hint">Нет данных</div>
+    <table id="stats-table" style="display:none">
+      <thead><tr><th>Тип</th><th>Начало</th><th>Длит.</th><th>Было, Ач</th><th>Стало, Ач</th><th>Δ, Ач</th></tr></thead>
+      <tbody id="stats-body"></tbody>
+    </table>
+    <div class="hint" style="margin-top:8px">
+      Хранятся последние 64 сессии, старые затираются. «Загрузка №N» — время ещё не известно:
+      оно появится, если открыть страницу до перезагрузки устройства.
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════════════════ ВКЛАДКА: ЛОГИ ════════════════════════════════ -->
 <div id="page-logs" class="page">
   <div class="card">
@@ -306,24 +323,76 @@ td    { padding: 4px 8px; border-bottom: 1px solid #21262d; }
 <script>
 /* ─── Переключение вкладок ─────────────────────────────────────────────── */
 
+/* Порядок в массиве должен совпадать с порядком кнопок .tab в разметке.
+ * При входе на вкладку подгружаем её данные; поллинг логов работает только пока вкладка открыта. */
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((t, i) =>
-    t.classList.toggle('active', ['monitor','settings','logs'][i] === name));
+    t.classList.toggle('active', ['monitor','stats','settings','logs'][i] === name));
   document.querySelectorAll('.page').forEach(p =>
     p.classList.toggle('active', p.id === 'page-' + name));
   if (name === 'monitor') {
     fetch('/api/data').then(r => r.text())
       .then(t => { try { applyData(t); } catch(e) {} }).catch(() => {});
   }
+  if (name === 'stats') loadStats();
   if (name === 'settings') loadSettings();
   if (name === 'logs') { logActive = true; loadLogs(); }
   else logActive = false;
 }
 
+/* ─── Статистика ───────────────────────────────────────────────────────── */
+
+/* Секунды → "ч:мм:сс" */
+function fmtDur(s) {
+  const p = n => String(n).padStart(2, '0');
+  return Math.floor(s / 3600) + ':' + p(Math.floor(s / 60) % 60) + ':' + p(s % 60);
+}
+
+/* Время начала сессии. ts — unix-время, 0 если устройство его не знало
+ * (не было ни SNTP, ни открытой страницы за всю ту загрузку): тогда показываем
+ * номер загрузки и секунды от её старта — порядок известен, даты нет. */
+function fmtStatsTime(r) {
+  if (r.ts) {
+    const d = new Date(r.ts * 1000), p = n => String(n).padStart(2, '0');
+    return `${p(d.getDate())}.${p(d.getMonth()+1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  return `загрузка №${r.boot}, +${fmtDur(r.up)}`;
+}
+
+/* Таблица сессий. s: 0 — идёт, 1 — завершена, 2 — оборвана пропаданием питания;
+ * t: 1 — разряд, 2 — заряд; a0/a1 — ёмкость в мАч в начале/конце. */
+function loadStats() {
+  fetch('/api/stats').then(r => r.json()).then(data => {
+    const rows = data.items.map(r => {
+      const delta = (r.a1 - r.a0) / 1000;
+      const note = r.s === 0 ? ' <span class="label">(идёт)</span>'
+                 : r.s === 2 ? ' <span class="neg" title="Питание пропало во время сессии">⚠</span>' : '';
+      return `<tr><td class="${r.t === 2 ? 'pos' : 'neg'}">${r.t === 2 ? 'Заряд' : 'Разряд'}${note}</td>` +
+             `<td>${fmtStatsTime(r)}</td><td>${fmtDur(r.dur)}</td>` +
+             `<td>${fmt(r.a0 / 1000, 2)}</td><td>${fmt(r.a1 / 1000, 2)}</td>` +
+             `<td class="${delta >= 0 ? 'pos' : 'neg'}">${delta >= 0 ? '+' : ''}${fmt(delta, 2)}</td></tr>`;
+    });
+    document.getElementById('stats-body').innerHTML = rows.join('');
+    document.getElementById('stats-table').style.display = rows.length ? '' : 'none';
+    document.getElementById('stats-empty').style.display = rows.length ? 'none' : '';
+  }).catch(() => {});
+}
+
+/* Часов реального времени нет — сообщаем устройству время браузера
+ * (оно принимает его, только если часы ещё не установлены) */
+fetch('/api/time', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({epoch: Math.floor(Date.now() / 1000)})}).catch(() => {});
+
 /* ─── SSE: получение данных BMS в реальном времени ────────────────────── */
 
 function fmt(v, d) { return v.toFixed(d); }
 
+/*
+ * Отрисовать снимок BMS (JSON из SSE или /api/data). Единицы с устройства:
+ * напряжение мВ, ток мА (+ заряд, − разряд), ёмкость мАч, температура 0.1 °C —
+ * здесь переводятся в В/А/Ач/°C. Нулевая ячейка = не подключена, не показываем.
+ * valid=false означает потерю связи с BMS: прячем данные, чтобы не вводить в заблуждение.
+ */
 function applyData(data) {
   const d = JSON.parse(data);
 
@@ -379,6 +448,7 @@ function applyData(data) {
     'Обновлено: ' + new Date().toLocaleTimeString();
 }
 
+/* Живые данные: устройство шлёт событие каждые 500 мс; EventSource сам переподключается при обрыве */
 function startSSE() {
   const es = new EventSource('/api/events');
 
@@ -392,6 +462,7 @@ function startSSE() {
 
 startSSE();
 
+/* Кнопки «Включить/Выключить»: интерфейс обновляем сразу, не дожидаясь следующего события SSE */
 function setCharger(on) {
   fetch('/api/charger', {
     method: 'POST',
@@ -408,6 +479,8 @@ function setCharger(on) {
 
 /* ─── Настройки ────────────────────────────────────────────────────────── */
 
+/* Заполнить форму текущими настройками. Пароли устройство не отдаёт — поля пустые,
+ * а пустой пароль при сохранении означает «не менять». Порог 0 показываем пустым полем. */
 function loadSettings() {
   fetch('/api/settings')
     .then(r => r.json())
@@ -434,6 +507,8 @@ function loadSettings() {
     });
 }
 
+/* Список сетей, найденных устройством при старте (кэш). Сохранённую сеть показываем,
+ * даже если сейчас её не слышно, чтобы выпадающий список не сбрасывал выбор. */
 function loadWifiScan(savedSsid) {
   fetch('/api/wifi/scan')
     .then(r => r.json())
@@ -459,6 +534,8 @@ function loadWifiScan(savedSsid) {
     .catch(() => {});
 }
 
+/* BLE-устройства, замеченные сканированием. Сканирование идёт постоянно, но сразу после
+ * старта список может быть пуст — поэтому до 6 повторов с интервалом 5 с. JK BMS идут первыми. */
 function loadBleScan(savedMac, retry) {
   retry = retry || 0;
   fetch('/api/ble/scan')
@@ -499,6 +576,8 @@ function loadBleScan(savedMac, retry) {
     });
 }
 
+/* Отправить всю форму. Пустое числовое поле даёт NaN → в JSON null → на устройстве
+ * это порог 0 (условие отключено). Изменение WiFi вступает в силу после перезагрузки. */
 function saveSettings() {
   const body = {
     wifi_ssid:           document.getElementById('wifi_ssid').value,
@@ -539,6 +618,7 @@ function saveSettings() {
   .catch(() => { msg.textContent = 'Ошибка соединения'; msg.className = 'err'; });
 }
 
+/* Забыть сохранённую сеть: после перезагрузки устройство поднимет точку доступа */
 function clearWifi() {
   if (!confirm('Отключиться от WiFi? После перезагрузки устройство будет работать как точка доступа.')) return;
   fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({wifi_clear: true})})
@@ -559,7 +639,7 @@ function restartDevice() {
     });
 }
 
-/* ─── select handlers ──────────────────────────────────────────────────── */
+/* ─── Обновление прошивки (OTA) ────────────────────────────────────────── */
 
 function otaFileChosen(input) {
   const btn = document.getElementById('ota-btn');
@@ -574,6 +654,8 @@ function otaFileChosen(input) {
   }
 }
 
+/* Загрузка .bin на устройство одним POST. XMLHttpRequest вместо fetch — ради
+ * событий прогресса загрузки. После успеха устройство само перезагрузится. */
 function uploadFirmware() {
   const file = document.getElementById('ota-file').files[0];
   if (!file) return;
@@ -621,6 +703,8 @@ function uploadFirmware() {
   xhr.send(file);
 }
 
+/* ─── Обработчики полей формы ──────────────────────────────────────────── */
+
 function toggleAuth(enabled) {
   document.getElementById('auth_fields').style.display = enabled ? '' : 'none';
 }
@@ -639,6 +723,8 @@ let logNext = 0;
 let logActive = false;
 let bootEpoch = null;   /* Date.now() в момент старта МК, вычисляется из uptime_ms */
 
+/* Строки лога приходят как "I (12345) tag: ..." — число это миллисекунды от старта МК.
+ * Заменяем их на реальную дату/время: bootEpoch = момент старта по часам браузера. */
 function formatLogMsg(msg) {
   if (!bootEpoch) return msg;
   return msg.replace(/^([IEWDV]) \((\d+)\) /, (_, level, ms) => {
@@ -654,6 +740,7 @@ function formatLogMsg(msg) {
   });
 }
 
+/* Дозагрузка новых строк лога (с номера logNext) каждые 2 с, пока открыта вкладка */
 function loadLogs() {
   if (!logActive) return;
   fetch('/api/logs?from=' + logNext)
