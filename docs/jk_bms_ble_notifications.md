@@ -35,9 +35,9 @@ JK BMS различает два режима стриминга:
 
 Правильная последовательность:
 1. Подключиться (BMS пикает — это нормально)
-2. Записать CMD_INIT (`0x97`) → подождать
-3. Записать CMD_GET_INFO (`0x96`) → подождать ~1 с
-4. **Записать CCCD `{0x01, 0x00}` в handle 0x0013**
+2. Подождать 200 мс, записать CMD_INIT (`0x97`)
+3. Подождать 500 мс, записать CMD_GET_INFO (`0x96`)
+4. Подождать 1000 мс и **записать CCCD `{0x01, 0x00}` в handle 0x0013**
 5. Уведомления идут бесконечно
 
 ## Почему мы долго не находили причину
@@ -64,7 +64,8 @@ Arduino). Поток по-прежнему обрывался на ~50 фрей�
 Изучив исходники Arduino BLE библиотеки
 (`BLERemoteCharacteristic::registerForNotify`), обнаружили: Arduino
 записывает CCCD **после** отправки обеих команд (с задержкой 1 с после
-CMD_GET_INFO). Добавили аналогичный шаг в ESP-IDF код — поток стал
+CMD_GET_INFO). Паузы в ESP-IDF коде: 200 / 500 / 1000 мс
+(см. `cmd_task` в `bms_ble.c`). Добавили аналогичный шаг в ESP-IDF код — поток стал
 бесконечным.
 
 ## Итоговый код (упрощённо)
@@ -80,8 +81,9 @@ esp_ble_gattc_get_descr_by_char_handle(gattc_if, conn_id,
 // descr.handle == 0x0013 для данного BMS
 
 // 2. В задаче инициализации — после CMD_GET_INFO
+vTaskDelay(pdMS_TO_TICKS(200));
 esp_ble_gattc_write_char(... CMD_INIT ...);
-vTaskDelay(pdMS_TO_TICKS(1000));
+vTaskDelay(pdMS_TO_TICKS(500));
 esp_ble_gattc_write_char(... CMD_GET_INFO ...);
 vTaskDelay(pdMS_TO_TICKS(1000));
 
