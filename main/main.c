@@ -15,6 +15,7 @@
 #include "charge_ctrl.h"
 #include "stats.h"
 #include "web_server.h"
+#include "wg_tunnel.h"
 
 static const char *TAG = "main";
 
@@ -56,6 +57,9 @@ void app_main(void)
     esp_log_level_set("charge_ctrl",  ESP_LOG_INFO);
     esp_log_level_set("stats",        ESP_LOG_INFO);
     esp_log_level_set("web_server",   ESP_LOG_INFO);
+    esp_log_level_set("wg_tunnel",    ESP_LOG_INFO);
+    esp_log_level_set("wg_config",    ESP_LOG_INFO);
+    esp_log_level_set("wg_web",       ESP_LOG_INFO);
     /* Подавить штатные WARN от httpd: 404 favicon, EAGAIN на отправке,
        оборванные/неполные запросы (parse_block: incomplete) */
     esp_log_level_set("httpd_uri",    ESP_LOG_ERROR);
@@ -99,6 +103,10 @@ void app_main(void)
 
     /* Журнал сессий разряда/заряда */
     stats_init();
+
+    /* WireGuard-туннель (если настроен). После stats_init(): оттуда запускается SNTP,
+     * а туннелю нужны корректные часы для рукопожатия. */
+    wg_tunnel_start();
 
     /* Запустить HTTP сервер (мониторинг + настройки) */
     web_server_start();

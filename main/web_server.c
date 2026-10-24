@@ -2,6 +2,7 @@
 /* Copyright (c) 2026 Borman22 */
 
 #include "web_server.h"
+#include "wg_web.h"
 #include "board_config.h"
 #include "bms_ble.h"
 #include "charge_ctrl.h"
@@ -914,7 +915,7 @@ void web_server_start(void)
     config.stack_size        = 16384;  /* SSE + scan handlers требуют увеличенного стека */
     config.max_open_sockets  = 7;      /* до 7 одновременных подключений (включая SSE) */
     config.lru_purge_enable  = true;   /* автозакрытие старых соединений при нехватке слотов */
-    config.max_uri_handlers  = 16;  /* текущих маршрутов 14, два запаса */
+    config.max_uri_handlers  = 18;  /* маршрутов 14 + 2 из wg_web, два запаса */
     config.recv_wait_timeout = 30;  /* OTA upload: до 1.9 МБ по WiFi, стандартные 5 с мало */
 
     httpd_handle_t server;
@@ -943,6 +944,8 @@ void web_server_start(void)
 
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++)
         httpd_register_uri_handler(server, &routes[i]);
+
+    wg_web_register(server, check_auth);    /* GET/POST /api/wg */
 
     ESP_LOGI(TAG, "HTTP server started on port 80");
 }

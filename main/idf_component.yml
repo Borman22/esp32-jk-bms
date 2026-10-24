@@ -1,3 +1,6 @@
 ## IDF Component Manager Manifest File
 dependencies:
   espressif/cjson: ">=1.7.15"
+  # WireGuard для lwIP. Оригинальная trombik/esp_wireguard на ESP-IDF 6.0 не собирается
+  # (GCC 15 с -Werror, нет mbedtls/entropy.h в mbedtls 4), эта ветка поддерживается.
+  esphome/wireguard: "^0.4.8"

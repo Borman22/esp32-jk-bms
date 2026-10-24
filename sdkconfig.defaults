@@ -22,3 +22,10 @@ CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
 # Partition table
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# lwIP: хранить указатель esp_netif в netif->client_data, а не в netif->state.
+# Без этого коллбэк esp_netif трактует netif->state как esp_netif_t и падает (Load access fault)
+# при создании интерфейса WireGuard, у которого в state лежит своя структура.
+# LWIP_ESP_NETIF_DATA включается при CONFIG_ESP_NETIF_BRIDGE_EN (см. lwip/port/include/lwipopts.h).
+CONFIG_ESP_NETIF_BRIDGE_EN=y
+CONFIG_LWIP_NUM_NETIF_CLIENT_DATA=1

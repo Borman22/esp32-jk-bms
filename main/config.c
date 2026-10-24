@@ -3,6 +3,7 @@
 
 #include "config.h"
 #include "board_config.h"
+#include "wg_config.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
@@ -173,9 +174,9 @@ void settings_save(const app_config_t *cfg)
 }
 
 /*
- * Сброс по долгому нажатию BOOT. Стирается только namespace "app_cfg"
- * (в том числе пароль веб-интерфейса — так восстанавливают доступ).
- * "wifi_pend" и "charge" не затрагиваются.
+ * Сброс по долгому нажатию BOOT. Стирается namespace "app_cfg" (в том числе
+ * пароль веб-интерфейса — так восстанавливают доступ) и настройки WireGuard
+ * ("wg_cfg", "wg_pend"). "wifi_pend" и "charge" не затрагиваются.
  */
 void settings_reset(void)
 {
@@ -186,6 +187,7 @@ void settings_reset(void)
         nvs_commit(h);
         nvs_close(h);
     }
+    wg_config_reset();
     set_defaults(&s_cfg);
 }
 

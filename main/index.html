@@ -268,6 +268,61 @@ td    { padding: 4px 8px; border-bottom: 1px solid #21262d; }
     </div>
   </div>
 
+  <div class="card">
+    <div class="section-title">VPN (WireGuard)</div>
+    <div style="margin-bottom:10px">
+      Состояние: <b id="wg-state">--</b>
+      <span id="wg-info" class="hint" style="margin-left:6px"></span>
+    </div>
+    <div id="wg-trial-note" class="hint" style="display:none;color:#d29922">
+      Новая конфигурация проверяется. Если рукопожатия не будет, устройство вернётся к прежней.
+    </div>
+    <div class="field">
+      <label>Приватный ключ этого устройства</label>
+      <input type="password" id="wg-priv" autocomplete="new-password">
+      <div class="hint">Вывод <code>wg genkey</code>. В браузер обратно не возвращается.</div>
+    </div>
+    <div class="field">
+      <label>Публичный ключ сервера</label>
+      <input type="text" id="wg-pub" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Preshared key (необязательно)</label>
+      <input type="password" id="wg-psk" autocomplete="new-password">
+      <div class="checkbox-row"><input type="checkbox" id="wg-psk-clear"><label for="wg-psk-clear" style="display:inline">убрать preshared key</label></div>
+    </div>
+    <div class="field">
+      <label>Адрес сервера (IP или имя)</label>
+      <input type="text" id="wg-endpoint" autocomplete="off" placeholder="203.0.113.10">
+    </div>
+    <div class="field">
+      <label>Порт сервера (UDP)</label>
+      <input type="number" id="wg-port" min="1" max="65535">
+    </div>
+    <div class="field">
+      <label>Адрес устройства в туннеле</label>
+      <input type="text" id="wg-addr" autocomplete="off" placeholder="10.8.0.2">
+    </div>
+    <div class="field">
+      <label>Маска туннельной сети</label>
+      <input type="text" id="wg-mask" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Keepalive, секунд (0 = выключено)</label>
+      <input type="number" id="wg-keepalive" min="0" max="65535">
+      <div class="hint">25 с держит открытым NAT у провайдера. Без keepalive туннель извне недоступен.</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button class="btn" onclick="saveWg()">Сохранить VPN</button>
+      <button class="btn danger" onclick="clearWg()">Отключить VPN</button>
+      <span id="wg-msg"></span>
+    </div>
+    <div class="hint" style="margin-top:6px">
+      Настройки туннеля применяются после перезагрузки. Когда VPN работает, эта страница
+      доступна и по адресу устройства в туннеле.
+    </div>
+  </div>
+
   <div class="card" style="border-color:#da363344">
     <div class="section-title" style="color:#f85149">Опасная зона</div>
     <div style="margin-bottom:16px">
@@ -337,7 +392,7 @@ function showTab(name) {
       .then(t => { try { applyData(t); } catch(e) {} }).catch(() => {});
   }
   if (name === 'stats') loadStats();
-  if (name === 'settings') loadSettings();
+  if (name === 'settings') { loadSettings(); loadWg(true); }
   if (name === 'logs') { logActive = true; loadLogs(); }
   else logActive = false;
 }
@@ -703,6 +758,76 @@ function uploadFirmware() {
   };
 
   xhr.send(file);
+}
+
+/* ─── VPN (WireGuard) ──────────────────────────────────────────────────── */
+
+const WG_STATE = {
+  disabled: 'не настроен', wait_wifi: 'ждёт WiFi', wait_time: 'ждёт установки времени',
+  connecting: 'рукопожатие...', up: 'работает'
+};
+
+/* fill=true — заполнить и поля формы (при входе на вкладку); иначе обновляется только
+ * статус, чтобы не затирать то, что пользователь сейчас вводит. */
+function loadWg(fill) {
+  fetch('/api/wg').then(r => r.json()).then(d => {
+    const s = d.status;
+    const st = document.getElementById('wg-state');
+    st.textContent = WG_STATE[s.state] || s.state;
+    st.style.color = s.state === 'up' ? '#3fb950' : (s.state === 'disabled' ? '#8b949e' : '#d29922');
+    let info = '';
+    if (s.configured) {
+      info = s.address + ' → ' + s.endpoint + ':' + s.port;
+      if (s.handshake_age_s >= 0) info += ', рукопожатие ' + s.handshake_age_s + ' с назад';
+    }
+    document.getElementById('wg-info').textContent = info;
+    document.getElementById('wg-trial-note').style.display = s.trial ? '' : 'none';
+    if (!fill) return;
+    const w = d.wg, $ = id => document.getElementById(id);
+    $('wg-pub').value = w.peer_public_key;
+    $('wg-endpoint').value = w.endpoint;
+    $('wg-port').value = w.port;
+    $('wg-addr').value = w.address;
+    $('wg-mask').value = w.netmask;
+    $('wg-keepalive').value = w.keepalive;
+    $('wg-priv').value = ''; $('wg-psk').value = ''; $('wg-psk-clear').checked = false;
+    $('wg-priv').placeholder = w.private_key_set ? 'задан - оставьте пустым, чтобы не менять' : '';
+    $('wg-psk').placeholder  = w.preshared_key_set ? 'задан - оставьте пустым, чтобы не менять' : '';
+  }).catch(() => {});
+}
+/* Статус обновляется, пока открыта вкладка «Настройки» */
+setInterval(() => {
+  if (document.getElementById('page-settings').classList.contains('active')) loadWg(false);
+}, 5000);
+
+function wgPost(body) {
+  const msg = document.getElementById('wg-msg');
+  msg.textContent = 'Сохранение...'; msg.className = '';
+  return fetch('/api/wg', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+    .then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); }))
+    .then(r => {
+      msg.textContent = r.restart_required
+        ? (r.wg_pending ? 'Сохранено как проба. Перезагрузите устройство.' : 'Сохранено. Перезагрузите устройство.')
+        : 'Без изменений';
+      msg.className = 'ok';
+      loadWg(true);
+    })
+    .catch(e => { msg.textContent = e.message || 'Ошибка соединения'; msg.className = 'err'; });
+}
+
+function saveWg() {
+  const v = id => document.getElementById(id).value.trim();
+  wgPost({
+    private_key: v('wg-priv'), peer_public_key: v('wg-pub'),
+    preshared_key: v('wg-psk'), preshared_clear: document.getElementById('wg-psk-clear').checked,
+    endpoint: v('wg-endpoint'), port: +v('wg-port'),
+    address: v('wg-addr'), netmask: v('wg-mask'), keepalive: +v('wg-keepalive')
+  });
+}
+
+function clearWg() {
+  if (!confirm('Удалить настройки VPN? После перезагрузки туннель работать не будет.')) return;
+  wgPost({clear: true});
 }
 
 /* ─── Обработчики полей формы ──────────────────────────────────────────── */
