@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (c) 2026 Borman22 */
+
 #include "stats.h"
 #include "bms_ble.h"
 #include "nvs.h"

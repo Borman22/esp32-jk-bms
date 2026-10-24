@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (c) 2026 Borman22 */
+
 #include "wifi_manager.h"
 #include "config.h"
 #include "esp_wifi.h"

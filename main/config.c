@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (c) 2026 Borman22 */
+
 #include "config.h"
 #include "board_config.h"
 #include "nvs_flash.h"

@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (c) 2026 Borman22 */
+
 #include "charge_ctrl.h"
 #include "board_config.h"
 #include "config.h"
