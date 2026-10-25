@@ -95,6 +95,11 @@ Pending WiFi (wifi_pend в NVS)?
 `s_sta_bg_reconnect = true` в APSTA → то же самое для фонового STA.  
 `start_sta()` сбрасывает `s_retry = 0` и event bits в начале — без этого второй вызов видит старый `WIFI_FAIL_BIT` и сразу возвращает false.
 
+**Канал STA ограничен 20 МГц (`esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW20)`):**  
+Роутер может раздавать 40 МГц, и ESP32 по умолчанию подстраивается под него. На слабом сигнале широкий канал даёт потери и повторы кадров: шумовая полоса вдвое больше, запаса по сигнал/шум на 3 дБ меньше. Константа в IDF 6: `WIFI_BW20` (`WIFI_BW_HT20` удалена). Задаётся и в `start_sta()`, и в APSTA-ветке `start_ap()`. Проверка: `esp_wifi_sta_get_negotiated_phymode()` должна вернуть HT20, а не HT40.
+
+**Таймеры TCP (`sdkconfig.defaults`):** `CONFIG_LWIP_TCP_MSL=3000` и `CONFIG_LWIP_TCP_FIN_WAIT_TIMEOUT=5000` вместо 60 с и 20 с. По умолчанию TIME_WAIT держится две минуты, при `MAX_ACTIVE_TCP=16` и потоке коротких соединений lwIP постоянно убивает старые PCB, и на этом пути в IDF 6.0 наблюдалась порча кучи (`tcp_slowtmr -> tcp_free`). Значения из `sdkconfig` не подхватываются, если файл уже существует: после правки `sdkconfig.defaults` менять строки и в `sdkconfig` (или пересоздать его).
+
 ---
 
 ## WireGuard (модуль, необязательный)

@@ -29,3 +29,9 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # LWIP_ESP_NETIF_DATA включается при CONFIG_ESP_NETIF_BRIDGE_EN (см. lwip/port/include/lwipopts.h).
 CONFIG_ESP_NETIF_BRIDGE_EN=y
 CONFIG_LWIP_NUM_NETIF_CLIENT_DATA=1
+
+# Короткий TIME_WAIT/FIN_WAIT: по умолчанию 2 минуты и 20 с при MAX_ACTIVE_TCP=16, и при потоке коротких
+# соединений lwIP постоянно "убивает" старые PCB. На этом пути в lwIP из ESP-IDF 6.0 наблюдалась порча
+# кучи (tcp_slowtmr -> tcp_free). Сеть локальная/VPN, длинный TIME_WAIT не нужен.
+CONFIG_LWIP_TCP_MSL=3000
+CONFIG_LWIP_TCP_FIN_WAIT_TIMEOUT=5000

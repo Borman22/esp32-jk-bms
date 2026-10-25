@@ -175,6 +175,9 @@ static void start_ap(void)
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP,  &ap_cfg));
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
         ESP_ERROR_CHECK(esp_wifi_start());
+        /* Только 20 МГц: на слабом сигнале канал 40 МГц даёт потери и повторы кадров. Узкий канал вдвое
+         * уменьшает шумовую полосу, и это добавляет около 3 дБ запаса по соотношению сигнал/шум. */
+        esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW20);
         s_ap_mode = true;
         ESP_LOGI(TAG, "AP started (APSTA): SSID='%s'  IP=192.168.4.1  STA→'%s'",
                  ssid, saved->wifi_ssid);
@@ -219,6 +222,9 @@ static bool start_sta(const char *ssid, const char *pass)
     /* MAX_MODEM: радио выключается между беконами. Экономит ~10 мА vs WIFI_PS_NONE.
      * Допустимо т.к. BLE имеет приоритет (esp_coex_preference_set), а SSE-трафик нечастый. */
     esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
+    /* Только 20 МГц: на слабом сигнале канал 40 МГц даёт потери и повторы кадров. Узкий канал вдвое
+     * уменьшает шумовую полосу, и это добавляет около 3 дБ запаса по соотношению сигнал/шум. */
+    esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW20);
 
     ESP_LOGI(TAG, "Connecting to '%s'...", ssid);
 

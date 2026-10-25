@@ -12,14 +12,24 @@ body { font-family: monospace; background: #0d1117; color: #c9d1d9; padding: 16p
 
 /* Вкладки */
 .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
-.tab  { padding: 8px 20px; border-radius: 6px; cursor: pointer; background: #161b22;
+.tab  { flex: 1 1 auto; /* вкладки занимают всю ширину рамки, лишнее место делят поровну */
+        padding: 8px 20px; border-radius: 6px; cursor: pointer; background: #161b22;
         border: 1px solid #30363d; color: #8b949e; font-family: monospace; font-size: 0.95em; }
 .tab.active { background: #1f6feb22; border-color: #1f6feb; color: #58a6ff; }
+/* На телефоне четыре вкладки с боковыми отступами по 20px не помещались в ширину экрана.
+ * Если вкладок станет больше, вернуть отступы (удалить это правило) и разрешить перенос: .tabs { flex-wrap: wrap } */
+@media (max-width: 480px) { .tab { padding: 8px 8px; } }
+@media (max-width: 360px) { .tab { padding: 8px 6px; font-size: 0.85em; } }
 .page { display: none; }
 .page.active { display: block; }
 
 /* Карточки */
 .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; margin-bottom: 10px; }
+/* Статистика: на узком экране таблица из шести колонок не помещается, и раньше она вылезала за рамку.
+ * fit-content растит рамку до самой узкой раскладки таблицы (страница в этом случае прокручивается
+ * вбок), а min-width держит ширину колонки там, где таблица и так помещается. Подсказка под таблицей
+ * при этом переносится внутри рамки: fit-content не берёт её длину в одну строку. */
+#page-stats .card { width: -moz-fit-content; width: fit-content; min-width: 100%; }
 .big  { font-size: 2.4em; font-weight: bold; }
 .soc  { color: #3fb950; }
 .vbat { color: #58a6ff; margin-left: 16px; }
