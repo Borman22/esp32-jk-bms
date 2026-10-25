@@ -35,3 +35,6 @@ CONFIG_LWIP_NUM_NETIF_CLIENT_DATA=1
 # кучи (tcp_slowtmr -> tcp_free). Сеть локальная/VPN, длинный TIME_WAIT не нужен.
 CONFIG_LWIP_TCP_MSL=3000
 CONFIG_LWIP_TCP_FIN_WAIT_TIMEOUT=5000
+
+# Имя устройства в DHCP и в списке клиентов роутера (по умолчанию "espressif", одинаково у всех плат на ESP-IDF).
+CONFIG_LWIP_LOCAL_HOSTNAME="esp32-jk-bms"

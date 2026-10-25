@@ -10,7 +10,7 @@ ESP32-C3 + JK-BMS (8-канальная LiFePO4) + веб-интерфейс.
 
 ```bash
 source ~/esp-idf/export.sh   # ESP-IDF v6.0
-cd /home/borman/Microcontrollers/ESP32/BMS_WEB
+cd <папка репозитория esp32-jk-bms>
 idf.py build
 idf.py -p /dev/ttyUSB0 flash
 ```

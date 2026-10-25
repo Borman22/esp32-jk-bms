@@ -4,4 +4,4 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # самого устройства; для подсети туннеля (wg_tunnel.c: allow_tunnel_subnet) нужен второй слот; с запасом взято 4.
 # Макрос меняет размер структуры, поэтому задаётся глобально для всех компонентов.
 add_compile_definitions(CONFIG_WIREGUARD_MAX_SRC_IPS=4)
-project(bms_web)
+project(esp32_jk_bms)

@@ -2934,8 +2934,7 @@ CONFIG_LOG_IN_IRAM=y
 #
 # default:
 CONFIG_LWIP_ENABLE=y
-# default:
-CONFIG_LWIP_LOCAL_HOSTNAME="espressif"
+CONFIG_LWIP_LOCAL_HOSTNAME="esp32-jk-bms"
 # default:
 CONFIG_LWIP_TCPIP_TASK_PRIO=18
 # default:

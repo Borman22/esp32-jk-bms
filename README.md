@@ -501,13 +501,13 @@ ESP-IDF httpd настроен на `max_open_sockets = 7`. Из них одно
 idf.py -p /dev/ttyUSB0 flash
 ```
 
-Команда флешит четыре компонента: bootloader, partition table, **ota_data_initial.bin** (инициализирует otadata) и bms_web.bin в слот `ota_0`.
+Команда флешит четыре компонента: bootloader, partition table, **ota_data_initial.bin** (инициализирует otadata) и esp32_jk_bms.bin в слот `ota_0`.
 
 ### Последующие обновления (WiFi, OTA)
 
 1. Собрать прошивку: `idf.py build`
 2. Открыть веб-интерфейс → **Настройки** → **Обновление прошивки**
-3. Нажать «Выбрать файл», указать `build/bms_web.bin`
+3. Нажать «Выбрать файл», указать `build/esp32_jk_bms.bin`
 4. Нажать «Прошить» — прогресс-бар показывает загрузку
 5. После 100% устройство автоматически перезагружается с новой прошивкой
 
